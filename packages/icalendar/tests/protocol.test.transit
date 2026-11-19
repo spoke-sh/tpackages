@@ -1,0 +1,11 @@
+IMPORT source FROM '../src/codec.transit';
+LET codec = USE source.Codec();
+TEST 'calendar edits preserve recurrence, timezone references and extensions' AS BEGIN
+  LET value = codec.decode(UTF8_ENCODE('BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Example//EN\r\nBEGIN:VEVENT\r\nUID:e1\r\nDTSTAMP:20260101T000000Z\r\nDTSTART;VALUE=DATE:20260102\r\nRRULE:FREQ=DAILY;COUNT=2\r\nX-APP:keep\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n'));
+  LET changed = codec.decode(codec.encode(codec.set_summary(value, 'e1', 'Hello, world')));
+  ASSERT ANY(changed.children[0].properties, p => p.name = 'X-APP' AND p.value = 'keep');
+  ASSERT ANY(changed.children[0].properties, p => p.name = 'RRULE' AND p.value = 'FREQ=DAILY;COUNT=2');
+END;
+TEST 'unclosed and mismatched components are refused' AS BEGIN
+  ASSERT codec.decode(UTF8_ENCODE('BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:x\r\nEND:VEVENT\r\n')) FAILS WITH 'MismatchedComponent';
+END;

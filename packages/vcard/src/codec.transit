@@ -1,0 +1,45 @@
+CREATE PUBLIC TYPE Card AS ROW(version TEXT, lines LIST<TEXT>);
+CREATE PUBLIC MODULE Codec() AS BEGIN
+  CREATE PUBLIC FUNCTION name(line TEXT) RETURNS TEXT AS BEGIN
+    LET field = SPLIT_QUOTED_FIRST($line, ':', quote => '"');
+    REQUIRE LENGTH(field) = 2 ELSE 'InvalidContentLine';
+    LET prefix = SPLIT_FIRST(field[0], ';')[0];
+    REQUIRE REGEX_MATCH(prefix, '^[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)?$') ELSE 'InvalidProperty';
+    RETURN UPPER(LAST(SPLIT(prefix, '.')));
+  END;
+  CREATE PUBLIC FUNCTION decode(body BYTES) RETURNS Card AS BEGIN
+    REQUIRE LENGTH($body) <= 1048576 ELSE 'CardTooLarge';
+    LET text = UTF8_DECODE($body);
+    REQUIRE ENDS_WITH(text, '\r\n') AND NOT CONTAINS(REPLACE(text, '\r\n', ''), '\n') ELSE 'InvalidLineEnding';
+    VAR lines = LIST<TEXT>();
+    FOR line IN DROP_LAST(SPLIT(text, '\r\n'), 1) DO
+      IF STARTS_WITH(line, ' ') OR STARTS_WITH(line, '\t') THEN
+        REQUIRE LENGTH(lines) > 0 ELSE 'InvalidFold';
+        SET lines = LIST_SET(lines, LENGTH(lines)-1, LAST(lines) || SUBSTRING(line, 1));
+      ELSE SET lines = APPEND(lines, line); END IF;
+      REQUIRE LENGTH(lines) <= 10000 AND LENGTH(LAST(lines)) <= 65536 ELSE 'CardTooLarge';
+    END FOR;
+    REQUIRE LENGTH(lines) >= 4 AND UPPER(lines[0]) = 'BEGIN:VCARD' AND UPPER(LAST(lines)) = 'END:VCARD' ELSE 'InvalidCard';
+    LET content = SLICE(lines, 1, LENGTH(lines)-1);
+    REQUIRE ALL(content, line => name(line) NOT IN ('BEGIN', 'END')) ELSE 'NestedCard';
+    LET version_line = ONLY(FILTER(content, line => name(line) = 'VERSION'));
+    LET version = SPLIT_FIRST(version_line, ':')[1];
+    REQUIRE version IN ('3.0', '4.0') ELSE 'UnsupportedVersion';
+    REQUIRE LENGTH(FILTER(content, line => name(line) = 'FN')) >= 1 ELSE 'MissingFormattedName';
+    IF version = '3.0' THEN REQUIRE LENGTH(FILTER(content, line => name(line) = 'N')) = 1 ELSE 'MissingStructuredName'; END IF;
+    IF version = '4.0' THEN REQUIRE UPPER(lines[1]) = 'VERSION:4.0' ELSE 'InvalidVersionPosition'; END IF;
+    RETURN ROW(version => version, lines => content);
+  END;
+  CREATE PUBLIC FUNCTION encode(card Card) RETURNS BYTES AS BEGIN
+    REQUIRE ALL($card.lines, line => NOT CONTAINS(line, '\r') AND NOT CONTAINS(line, '\n')) ELSE 'LineInjection';
+    LET lines = APPEND(APPEND(['BEGIN:VCARD'], $card.lines), 'END:VCARD');
+    LET body = UTF8_ENCODE(JOIN(MAP_LIST(lines, line => UTF8_FOLD(line, 75, '\r\n ')), '\r\n') || '\r\n');
+    REQUIRE decode(body).version = $card.version ELSE 'VersionMismatch';
+    RETURN body;
+  END;
+  CREATE PUBLIC FUNCTION set_formatted_name(card Card, value TEXT) RETURNS Card AS BEGIN
+    REQUIRE NOT CONTAINS($value, '\r') ELSE 'InvalidText';
+    LET escaped = REPLACE(REPLACE(REPLACE(REPLACE($value, '\\', '\\\\'), '\n', '\\n'), ';', '\\;'), ',', '\\,');
+    RETURN $card WITH (lines => APPEND(FILTER($card.lines, line => name(line) <> 'FN'), 'FN:' || escaped));
+  END;
+END;

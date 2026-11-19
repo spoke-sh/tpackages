@@ -1,0 +1,43 @@
+CREATE PUBLIC TYPE Resource AS ROW(href TEXT, status BIGINT, properties MAP<TEXT, XML_NODE>, errors MAP<TEXT, BIGINT>);
+CREATE PUBLIC MODULE Codec() AS BEGIN
+  CREATE PUBLIC FUNCTION status(line TEXT) RETURNS BIGINT AS BEGIN
+    LET parts = SPLIT($line, ' ');
+    REQUIRE LENGTH(parts) >= 2 AND STARTS_WITH(parts[0], 'HTTP/') AND REGEX_MATCH(parts[1], '^[1-5][0-9][0-9]$') ELSE 'InvalidStatus';
+    RETURN PARSE_UINT(parts[1]);
+  END;
+  CREATE PUBLIC FUNCTION multistatus(body BYTES, base TEXT, allowed_hosts SET<TEXT>) RETURNS ROW(resources LIST<Resource>, token OPTION<TEXT>, limited BOOLEAN) AS BEGIN
+    LET root = XML_PARSE($body, max_bytes => 1048576, max_depth => 32, max_nodes => 20000, dtd => FALSE, external_entities => FALSE);
+    REQUIRE XML_NAME(root) = '{DAV:}multistatus' ELSE 'InvalidMultistatus';
+    VAR resources = LIST<Resource>(); VAR seen = SET<TEXT>(); VAR limited = FALSE;
+    FOR response IN XML_CHILDREN(root, '{DAV:}response') DO
+      LET href = URL_RESOLVE($base, XML_TEXT(ONLY(XML_CHILDREN(response, '{DAV:}href'))));
+      REQUIRE HTTPS_URL(href, $allowed_hosts) AND URL_ORIGIN(href) = URL_ORIGIN($base) AND NOT CONTAINS(seen, href) ELSE 'InvalidHref';
+      SET seen = SET_ADD(seen, href);
+      VAR properties = MAP<TEXT, XML_NODE>(); VAR errors = MAP<TEXT, BIGINT>();
+      LET direct_status = XML_OPTION_CHILD(response, '{DAV:}status');
+      LET code = CASE WHEN IS_PRESENT(direct_status) THEN status(XML_TEXT(REQUIRE_SOME(direct_status))) ELSE 200 END;
+      IF href = $base AND code = 507 THEN SET limited = TRUE; END IF;
+      FOR propstat IN XML_CHILDREN(response, '{DAV:}propstat') DO
+        LET property_status = status(XML_TEXT(ONLY(XML_CHILDREN(propstat, '{DAV:}status'))));
+        FOR node IN XML_ELEMENT_CHILDREN(ONLY(XML_CHILDREN(propstat, '{DAV:}prop'))) DO
+          LET name = XML_NAME(node);
+          REQUIRE NOT MAP_HAS(properties, name) AND NOT MAP_HAS(errors, name) ELSE 'DuplicateProperty';
+          IF property_status BETWEEN 200 AND 299 THEN SET properties = MAP_SET(properties, name, node);
+          ELSE SET errors = MAP_SET(errors, name, property_status); END IF;
+        END FOR;
+      END FOR;
+      SET resources = APPEND(resources, ROW(href => href, status => code, properties => properties, errors => errors));
+    END FOR;
+    REQUIRE LENGTH(resources) <= 1000 ELSE 'TooManyResources';
+    RETURN ROW(resources => resources, token => OPTION_MAP(XML_OPTION_CHILD(root, '{DAV:}sync-token'), XML_TEXT), limited => limited);
+  END;
+  CREATE PUBLIC FUNCTION propfind(names LIST<TEXT>) RETURNS BYTES AS BEGIN
+    REQUIRE LENGTH($names) <= 64 ELSE 'TooManyProperties';
+    RETURN XML_ENCODE(XML_ELEMENT('{DAV:}propfind', MAP(), [XML_ELEMENT('{DAV:}prop', MAP(), MAP_LIST($names, name => XML_ELEMENT(name, MAP(), [])))]));
+  END;
+  CREATE PUBLIC FUNCTION sync(token TEXT) RETURNS BYTES AS BEGIN
+    RETURN XML_ENCODE(XML_ELEMENT('{DAV:}sync-collection', MAP(), [XML_TEXT_ELEMENT('{DAV:}sync-token', $token),
+      XML_TEXT_ELEMENT('{DAV:}sync-level', '1'), XML_ELEMENT('{DAV:}prop', MAP(), [XML_ELEMENT('{DAV:}getetag', MAP(), [])]),
+      XML_ELEMENT('{DAV:}limit', MAP(), [XML_TEXT_ELEMENT('{DAV:}nresults', '100')])]));
+  END;
+END;

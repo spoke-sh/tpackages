@@ -1,0 +1,85 @@
+IMPORT wire FROM './codec.transit';
+CREATE PUBLIC INTERFACE Requests AS BEGIN
+  DATAFLOW request(method TEXT, url TEXT, headers HTTP_FIELDS, body SECRET<BYTES>) RETURNS HTTP_RESULT;
+END;
+CREATE PUBLIC MODULE Sync(binding SCHEMA_BINDING, client MODULE Requests, collection TEXT, supports_sync BOOLEAN) AS BEGIN
+  BIND SCHEMA mirror TO $binding;
+  LET codec = USE wire.Codec();
+  CREATE PRIVATE DOCUMENT mirror.objects (href TEXT PRIMARY KEY, body PROTECTED_REF) WITH (profile = 'versioned');
+  CREATE PRIVATE TABLE mirror.versions (href TEXT PRIMARY KEY, owner OWNER, etag TEXT, generation TEXT, deleted BOOLEAN);
+  CREATE PRIVATE TABLE mirror.cursor (owner OWNER PRIMARY KEY, token TEXT, generation TEXT, running BOOLEAN);
+  CREATE PRIVATE QUEUE mirror.jobs (owner OWNER, generation TEXT, token TEXT, snapshot BOOLEAN) WITH (max_attempts = 1);
+  CREATE PRIVATE STREAM mirror.changes (event_id TEXT, owner OWNER, href TEXT, action TEXT)
+    WITH (retention = 'unlimited', partition_by = 'owner', disclosure = 'current_owner');
+  CREATE DATAFLOW mirror.refresh FROM COMMAND () AS request WITH (idempotency = 'original_owner_request') AS BEGIN ATOMIC
+    INSERT INTO mirror.cursor VALUES (CURRENT_OWNER(), '', NEW_ID(), FALSE) ON CONFLICT DO NOTHING;
+    LET cursor = SELECT ONE * FROM mirror.cursor WHERE owner = CURRENT_OWNER();
+    REQUIRE NOT cursor.running ELSE 'SyncInProgress';
+    LET generation = NEW_ID();
+    UPDATE mirror.cursor SET running = TRUE, generation = generation WHERE owner = CURRENT_OWNER();
+    ENQUEUE INTO mirror.jobs VALUES (CURRENT_OWNER(), generation, cursor.token, cursor.token = '' OR NOT $supports_sync);
+  END;
+  CREATE DATAFLOW mirror.page FROM QUEUE mirror.jobs AS job AS BEGIN
+    LET response = CALL $client.request(CASE WHEN $supports_sync THEN 'REPORT' ELSE 'PROPFIND' END, $collection,
+      MAP('Depth' => CASE WHEN $supports_sync THEN '0' ELSE '1' END, 'Content-Type' => 'application/xml'),
+      CASE WHEN $supports_sync THEN codec.sync(job.token) ELSE codec.propfind(['{DAV:}getetag', '{DAV:}resourcetype']) END);
+    IF response.outcome = 'known' AND response.status = 403 AND $supports_sync
+      AND XML_HAS_NAME(XML_PARSE(response.body, max_bytes => 1048576, dtd => FALSE, external_entities => FALSE), '{DAV:}valid-sync-token') THEN
+      BEGIN ATOMIC
+        REQUIRE job.token <> '' ELSE 'SyncTokenRefused';
+        ENQUEUE INTO mirror.jobs VALUES (job.owner, job.generation, '', TRUE);
+      END;
+      RETURN;
+    END IF;
+    REQUIRE response.outcome = 'known' AND response.status = 207 ELSE 'SyncFailed';
+    LET page = codec.multistatus(response.body, $collection, SET(URL_HOST($collection)));
+    VAR records = LIST<ROW(href TEXT, etag TEXT, body OPTION<SECRET<BYTES>>, deleted BOOLEAN)>();
+    FOR resource IN page.resources DO
+      IF resource.href = $collection THEN CONTINUE; END IF;
+      IF resource.status = 404 THEN SET records = APPEND(records, ROW(href => resource.href, etag => '', body => NONE, deleted => TRUE));
+      ELSE
+        REQUIRE resource.status BETWEEN 200 AND 299 AND MAP_HAS(resource.properties, '{DAV:}getetag') ELSE 'IncompleteResource';
+        LET etag = XML_TEXT(MAP_GET(resource.properties, '{DAV:}getetag'));
+        LET fetched = CALL $client.request('GET', resource.href, MAP('If-Match' => etag), BYTES '');
+        REQUIRE fetched.outcome = 'known' AND fetched.status = 200 AND HTTP_FIELD_UNIQUE(fetched.headers, 'ETag') = etag ELSE 'ResourceChanged';
+        SET records = APPEND(records, ROW(href => resource.href, etag => etag, body => SOME(fetched.body), deleted => FALSE));
+      END IF;
+    END FOR;
+    BEGIN ATOMIC
+      REQUIRE (SELECT ONE generation FROM mirror.cursor WHERE owner = job.owner).generation = job.generation ELSE 'StaleSync';
+      FOR record IN records DO
+        LET old = SELECT OPTIONAL * FROM mirror.versions WHERE href = record.href;
+        IF NOT record.deleted THEN UPSERT INTO mirror.objects VALUES (record.href, PROTECT(REQUIRE_SOME(record.body), 'dav.object', INFINITY)); END IF;
+        UPSERT INTO mirror.versions VALUES (record.href, job.owner, record.etag, job.generation, record.deleted);
+        IF NOT IS_PRESENT(old) OR REQUIRE_SOME(old).etag <> record.etag OR REQUIRE_SOME(old).deleted <> record.deleted THEN
+          PRODUCE INTO mirror.changes VALUES (OPERATION_ID(job.generation, record.href || ':' || record.etag), job.owner, record.href, CASE WHEN record.deleted THEN 'deleted' ELSE 'updated' END);
+        END IF;
+      END FOR;
+      IF page.limited THEN
+        REQUIRE IS_PRESENT(page.token) AND REQUIRE_SOME(page.token) <> job.token ELSE 'NonAdvancingCursor';
+        ENQUEUE INTO mirror.jobs VALUES (job.owner, job.generation, REQUIRE_SOME(page.token), job.snapshot);
+      ELSE
+        IF job.snapshot THEN
+          FOR stale IN SELECT MANY * FROM mirror.versions WHERE owner = job.owner AND generation <> job.generation AND NOT deleted LIMIT 1001 DO
+            UPDATE mirror.versions SET deleted = TRUE WHERE href = stale.href;
+            PRODUCE INTO mirror.changes VALUES (OPERATION_ID(job.generation, stale.href || ':deleted'), job.owner, stale.href, 'deleted');
+          END FOR;
+        END IF;
+        UPDATE mirror.cursor SET running = FALSE WHERE owner = job.owner;
+      END IF;
+      UPDATE mirror.cursor SET token = COALESCE(page.token, '') WHERE owner = job.owner;
+    END;
+  ON FAILURE failure
+    BEGIN ATOMIC
+      UPDATE mirror.cursor SET running = FALSE, token = CASE WHEN job.snapshot THEN '' ELSE token END WHERE owner = job.owner AND generation = job.generation;
+      PRODUCE INTO mirror.changes VALUES (job.generation || ':failed', job.owner, $collection, 'sync_failed');
+    END;
+  END;
+  CREATE DATAFLOW mirror.read FROM COMMAND (href TEXT) AS request AS BEGIN ATOMIC
+    REQUIRE (SELECT ONE * FROM mirror.versions WHERE href = request.href AND owner = CURRENT_OWNER()).deleted = FALSE ELSE 'NotFound';
+    RETURN UNPROTECT((SELECT ONE body FROM mirror.objects WHERE href = request.href).body, 'dav.object');
+  END;
+  EXPORT DATAFLOW mirror.refresh AS refresh;
+  EXPORT DATAFLOW mirror.read AS read;
+  EXPORT STREAM mirror.changes AS changes;
+END;

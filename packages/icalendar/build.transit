@@ -1,0 +1,3 @@
+EXPORT MODULE Codec FROM './src/codec.transit';
+EXPORT TARGET default FROM './examples/build.transit';
+EXPORT TEST TARGET tests FROM './tests/build.transit';

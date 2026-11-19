@@ -1,0 +1,80 @@
+CREATE PUBLIC TYPE Property AS ROW(name TEXT, parameters TEXT, value TEXT, raw TEXT);
+CREATE PUBLIC TYPE Component AS ROW(name TEXT, properties LIST<Property>, children LIST<Component>);
+CREATE PUBLIC MODULE Codec() AS BEGIN
+  CREATE PUBLIC FUNCTION property(line TEXT) RETURNS Property AS BEGIN
+    LET parts = SPLIT_QUOTED_FIRST($line, ':', quote => '"');
+    REQUIRE LENGTH(parts) = 2 ELSE 'InvalidContentLine';
+    LET head = SPLIT_FIRST(parts[0], ';');
+    REQUIRE REGEX_MATCH(head[0], '^[A-Za-z0-9-]+$') ELSE 'InvalidProperty';
+    RETURN ROW(name => UPPER(head[0]), parameters => CASE WHEN LENGTH(head) = 2 THEN head[1] ELSE '' END, value => parts[1], raw => $line);
+  END;
+  CREATE PUBLIC FUNCTION unfold(body BYTES) RETURNS LIST<TEXT> AS BEGIN
+    REQUIRE LENGTH($body) <= 1048576 ELSE 'CalendarTooLarge';
+    LET text = UTF8_DECODE($body);
+    REQUIRE ENDS_WITH(text, '\r\n') AND NOT CONTAINS(REPLACE(text, '\r\n', ''), '\n') ELSE 'InvalidLineEnding';
+    VAR lines = LIST<TEXT>();
+    FOR line IN DROP_LAST(SPLIT(text, '\r\n'), 1) DO
+      IF STARTS_WITH(line, ' ') OR STARTS_WITH(line, '\t') THEN
+        REQUIRE LENGTH(lines) > 0 ELSE 'InvalidFold';
+        SET lines = LIST_SET(lines, LENGTH(lines) - 1, LAST(lines) || SUBSTRING(line, 1));
+      ELSE
+        REQUIRE LENGTH(line) > 0 ELSE 'EmptyContentLine';
+        SET lines = APPEND(lines, line);
+      END IF;
+      REQUIRE LENGTH(lines) <= 10000 AND LENGTH(LAST(lines)) <= 65536 ELSE 'CalendarTooLarge';
+    END FOR;
+    RETURN lines;
+  END;
+  CREATE FUNCTION component(lines LIST<TEXT>, start BIGINT, depth BIGINT) RETURNS ROW(value Component, next BIGINT) AS BEGIN
+    REQUIRE $depth <= 8 AND STARTS_WITH($lines[$start], 'BEGIN:') ELSE 'InvalidComponent';
+    LET name = UPPER(SUBSTRING($lines[$start], 6));
+    VAR props = LIST<Property>(); VAR children = LIST<Component>(); VAR cursor = $start + 1;
+    WHILE cursor < LENGTH($lines) BUDGET 10000 DO
+      LET line = $lines[cursor];
+      IF STARTS_WITH(line, 'END:') THEN
+        REQUIRE UPPER(SUBSTRING(line, 4)) = name ELSE 'MismatchedComponent';
+        RETURN ROW(value => ROW(name => name, properties => props, children => children), next => cursor + 1);
+      ELSEIF STARTS_WITH(line, 'BEGIN:') THEN
+        LET child = component($lines, cursor, $depth + 1);
+        SET children = APPEND(children, child.value); SET cursor = child.next;
+      ELSE
+        SET props = APPEND(props, property(line)); SET cursor = cursor + 1;
+      END IF;
+    END WHILE;
+    FAIL 'UnclosedComponent';
+  END;
+  CREATE PUBLIC FUNCTION decode(body BYTES) RETURNS Component AS BEGIN
+    LET lines = unfold($body); REQUIRE LENGTH(lines) >= 4 ELSE 'InvalidCalendar';
+    LET parsed = component(lines, 0, 0);
+    REQUIRE parsed.next = LENGTH(lines) AND parsed.value.name = 'VCALENDAR' ELSE 'InvalidCalendar';
+    REQUIRE ONLY(FILTER(parsed.value.properties, p => p.name = 'VERSION')).value = '2.0'
+      AND LENGTH(FILTER(parsed.value.properties, p => p.name = 'PRODID')) = 1 ELSE 'InvalidCalendar';
+    FOR child IN parsed.value.children DO
+      IF child.name = 'VEVENT' THEN
+        REQUIRE LENGTH(FILTER(child.properties, p => p.name = 'UID')) = 1 AND LENGTH(FILTER(child.properties, p => p.name = 'DTSTAMP')) = 1 ELSE 'InvalidEvent';
+        REQUIRE NOT (ANY(child.properties, p => p.name = 'DTEND') AND ANY(child.properties, p => p.name = 'DURATION')) ELSE 'InvalidEvent';
+      END IF;
+    END FOR;
+    RETURN parsed.value;
+  END;
+  CREATE FUNCTION lines(value Component, depth BIGINT) RETURNS LIST<TEXT> AS BEGIN
+    REQUIRE $depth <= 8 ELSE 'CalendarTooDeep';
+    VAR result = APPEND(['BEGIN:' || $value.name], MAP_LIST($value.properties, p => p.name || CASE WHEN p.parameters = '' THEN '' ELSE ';' || p.parameters END || ':' || p.value));
+    FOR child IN $value.children DO SET result = APPEND(result, lines(child, $depth + 1)); END FOR;
+    RETURN APPEND(result, 'END:' || $value.name);
+  END;
+  CREATE PUBLIC FUNCTION encode(value Component) RETURNS BYTES AS BEGIN
+    LET body = UTF8_ENCODE(JOIN(MAP_LIST(lines($value, 0), line => UTF8_FOLD(line, 75, '\r\n ')), '\r\n') || '\r\n');
+    LET validated = decode(body);
+    RETURN body;
+  END;
+  CREATE PUBLIC FUNCTION set_summary(value Component, uid TEXT, summary TEXT) RETURNS Component AS BEGIN
+    LET escaped = REPLACE(REPLACE(REPLACE(REPLACE($summary, '\\', '\\\\'), '\n', '\\n'), ';', '\\;'), ',', '\\,');
+    REQUIRE NOT CONTAINS(escaped, '\r') ELSE 'InvalidText';
+    VAR result = $value; VAR matches = 0;
+    SET result.children = MAP_LIST($value.children, child => CASE WHEN child.name = 'VEVENT' AND ANY(child.properties, p => p.name = 'UID' AND p.value = $uid)
+      THEN child WITH (properties => APPEND(FILTER(child.properties, p => p.name <> 'SUMMARY'), property('SUMMARY:' || escaped))) ELSE child END);
+    REQUIRE ANY($value.children, child => child.name = 'VEVENT' AND ANY(child.properties, p => p.name = 'UID' AND p.value = $uid)) ELSE 'EventNotFound';
+    RETURN result;
+  END;
+END;

@@ -1,0 +1,6 @@
+DEPENDENCY webdav FROM WORKSPACE 'webdav';
+DEPENDENCY vcard FROM WORKSPACE 'vcard';
+EXPORT MODULE Client FROM './src/client.transit';
+EXPORT MODULE Mirror FROM './src/client.transit';
+EXPORT TARGET default FROM './examples/build.transit';
+EXPORT TEST TARGET tests FROM './tests/build.transit';

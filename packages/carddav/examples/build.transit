@@ -1,0 +1,18 @@
+IMPORT library FROM '../build.transit';
+
+EXPORT MODULE Application() AS BEGIN
+  LET api = USE library.Client(SCHEMA_BINDING('example_carddav'), 'https://dav.example.test', HTTP_AUTH_SETTING('example.dav'));
+  AUTHORIZE MODULE api WITH (commands = ROLE SETTING('example.command_role'), state = ROLE SETTING('example.state_role'), effects = ROLE SETTING('example.effect_role'), reads = ROLE SETTING('example.read_role'), maintenance = ROLE SETTING('example.maintenance_role'));
+  ACTIVATE MODULE api;
+  EXPORT MODULE api AS api;
+  BIND SCHEMA consumer TO SCHEMA_BINDING('example_carddav_consumer');
+  CREATE PRIVATE TABLE consumer.seen (id TEXT PRIMARY KEY, owner OWNER);
+  CREATE DATAFLOW consumer.observe FROM STREAM api.results AS event
+    WITH (consumer = 'example.results', required = TRUE, checkpoint = 'terminal_atomic') AS BEGIN ATOMIC
+    INSERT INTO consumer.seen VALUES (event.event_id, event.owner) ON CONFLICT DO ASSERT SAME ROW;
+  END;
+  AUTHORIZE DATAFLOW consumer.observe AS ROLE SETTING('example.consumer_role');
+  ACTIVATE DATAFLOW consumer.observe;
+END;
+LET application = USE Application();
+EXPORT TARGET default AS SQL OF application;

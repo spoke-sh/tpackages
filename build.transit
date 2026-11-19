@@ -8,6 +8,11 @@ WORKSPACE tpackages AS BEGIN
   PACKAGE saml AT './packages/saml';
   PACKAGE scim AT './packages/scim';
   PACKAGE webauthn AT './packages/webauthn';
+  PACKAGE carddav AT './packages/carddav';
+  PACKAGE caldav AT './packages/caldav';
+  PACKAGE vcard AT './packages/vcard';
+  PACKAGE icalendar AT './packages/icalendar';
+  PACKAGE webdav AT './packages/webdav';
   PACKAGE websub AT './packages/websub';
   PACKAGE json_rpc AT './packages/json-rpc';
   PACKAGE tus AT './packages/tus';
@@ -23,6 +28,11 @@ IMPORT oidc FROM PACKAGE oidc FILE 'build.transit';
 IMPORT saml FROM PACKAGE saml FILE 'build.transit';
 IMPORT scim FROM PACKAGE scim FILE 'build.transit';
 IMPORT webauthn FROM PACKAGE webauthn FILE 'build.transit';
+IMPORT carddav FROM PACKAGE carddav FILE 'build.transit';
+IMPORT caldav FROM PACKAGE caldav FILE 'build.transit';
+IMPORT vcard FROM PACKAGE vcard FILE 'build.transit';
+IMPORT icalendar FROM PACKAGE icalendar FILE 'build.transit';
+IMPORT webdav FROM PACKAGE webdav FILE 'build.transit';
 IMPORT websub FROM PACKAGE websub FILE 'build.transit';
 IMPORT json_rpc FROM PACKAGE json_rpc FILE 'build.transit';
 IMPORT tus FROM PACKAGE tus FILE 'build.transit';
@@ -38,6 +48,11 @@ EXPORT TARGET default AS GROUP (
   saml.default,
   scim.default,
   webauthn.default,
+  carddav.default,
+  caldav.default,
+  vcard.default,
+  icalendar.default,
+  webdav.default,
   websub.default,
   json_rpc.default,
   tus.default,
@@ -53,6 +68,11 @@ EXPORT TEST TARGET tests AS GROUP (
   saml.tests,
   scim.tests,
   webauthn.tests,
+  carddav.tests,
+  caldav.tests,
+  vcard.tests,
+  icalendar.tests,
+  webdav.tests,
   websub.tests,
   json_rpc.tests,
   tus.tests,
