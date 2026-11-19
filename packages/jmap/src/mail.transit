@@ -1,0 +1,37 @@
+IMPORT types FROM './core.transit';
+CREATE PUBLIC INTERFACE Core AS BEGIN
+  DATAFLOW call(using SET<TEXT>, calls LIST<types.Call>) RETURNS JSON;
+  DATAFLOW session() RETURNS JSON;
+END;
+CREATE PUBLIC MODULE Mail(binding SCHEMA_BINDING, core MODULE Core, account TEXT) AS BEGIN
+  BIND SCHEMA mail TO $binding;
+  CREATE DATAFLOW mail.method FROM COMMAND (name TEXT, args JSON) AS request WITH (continuation = 'durable') AS BEGIN
+    REQUIRE request.name IN ('Mailbox/get', 'Mailbox/changes', 'Mailbox/query', 'Email/get', 'Email/changes', 'Email/query', 'Email/queryChanges') ELSE 'UnsupportedMethod';
+    LET result = CALL $core.call(SET('urn:ietf:params:jmap:core', 'urn:ietf:params:jmap:mail'),
+      [ROW(name => request.name, arguments => JSON_SET(request.args, 'accountId', JSON_FROM($account)), id => 'mail')]);
+    LET response = ONLY(JSON_ARRAY(result, 'methodResponses'));
+    LET name = JSON_AS_STRING(JSON_ARRAY_AT(response, 0));
+    LET args = JSON_ARRAY_AT(response, 1);
+    IF name = 'error' THEN RETURN ERR(JSON_STRING(args, 'type')); END IF;
+    REQUIRE name = request.name AND JSON_STRING(args, 'accountId') = $account ELSE 'InvalidResponse';
+    RETURN OK(args);
+  END;
+  CREATE DATAFLOW mail.query FROM COMMAND (type TEXT, position BIGINT) AS request WITH (continuation = 'durable') AS BEGIN
+    REQUIRE request.type IN ('Email', 'Mailbox') AND request.position >= 0 ELSE 'InvalidQuery';
+    RETURN CALL mail.method(request.type || '/query', JSON_OBJECT('position', request.position, 'limit', 100, 'calculateTotal', TRUE));
+  END;
+  CREATE DATAFLOW mail.get FROM COMMAND (type TEXT, ids LIST<TEXT>) AS request WITH (continuation = 'durable') AS BEGIN
+    REQUIRE request.type IN ('Email', 'Mailbox') AND LENGTH(request.ids) <= 100 ELSE 'InvalidQuery';
+    LET properties = CASE WHEN request.type = 'Email' THEN ['id', 'threadId', 'mailboxIds', 'keywords', 'size', 'receivedAt', 'subject', 'from', 'to']
+      ELSE ['id', 'name', 'parentId', 'role', 'sortOrder', 'totalEmails', 'unreadEmails'] END;
+    RETURN CALL mail.method(request.type || '/get', JSON_OBJECT('ids', JSON_FROM_LIST(request.ids), 'properties', JSON_FROM_LIST(properties)));
+  END;
+  CREATE DATAFLOW mail.changes FROM COMMAND (type TEXT, state TEXT) AS request WITH (continuation = 'durable') AS BEGIN
+    REQUIRE request.type IN ('Email', 'Mailbox') ELSE 'InvalidType';
+    RETURN CALL mail.method(request.type || '/changes', JSON_OBJECT('sinceState', request.state, 'maxChanges', 100));
+  END;
+  EXPORT DATAFLOW mail.query AS query;
+  EXPORT DATAFLOW mail.get AS get;
+  EXPORT DATAFLOW mail.changes AS changes;
+  EXPORT DATAFLOW mail.method AS method;
+END;

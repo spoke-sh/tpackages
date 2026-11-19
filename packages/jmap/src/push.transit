@@ -1,0 +1,18 @@
+IMPORT interfaces FROM './mail.transit';
+CREATE PUBLIC INTERFACE Refresh AS BEGIN DATAFLOW refresh(); END;
+CREATE PUBLIC MODULE Push(binding SCHEMA_BINDING, core MODULE interfaces.Core, target MODULE Refresh, authorization HTTP_AUTH_CAPABILITY, allowed_hosts SET<TEXT>) AS BEGIN
+  BIND SCHEMA push TO $binding;
+  CREATE DATAFLOW push.connect FROM COMMAND () AS request WITH (continuation = 'durable') AS BEGIN
+    LET session = CALL $core.session();
+    LET url = URI_TEMPLATE_EXPAND(JSON_STRING(session, 'eventSourceUrl'), MAP('types' => '*', 'closeafter' => 'no', 'ping' => '60'));
+    REQUIRE HTTPS_URL(url, $allowed_hosts) ELSE 'DestinationDenied';
+    BIND SSE push.connection TO url WITH (authorization = $authorization, allowed_hosts = $allowed_hosts, max_event_bytes = 65536,
+      max_buffer_events = 100, reconnect = 'native', on_reconnect = 'reconcile', owner = CURRENT_OWNER());
+  END;
+  CREATE DATAFLOW push.changed FROM SSE push.connection AS event WITH (checkpoint = 'terminal_atomic') AS BEGIN
+    IF event.kind = 'reconnect' OR event.type = 'state' THEN
+      CALL $target.refresh() ON REFUSAL 'SyncInProgress' COALESCE;
+    END IF;
+  END;
+  EXPORT DATAFLOW push.connect AS connect;
+END;

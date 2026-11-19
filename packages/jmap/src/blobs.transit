@@ -1,0 +1,27 @@
+IMPORT interfaces FROM './mail.transit';
+CREATE PUBLIC MODULE Blobs(binding SCHEMA_BINDING, core MODULE interfaces.Core, authorization HTTP_AUTH_CAPABILITY, storage BLOB_STORE, allowed_hosts SET<TEXT>) AS BEGIN
+  BIND SCHEMA blobs TO $binding;
+  CREATE DATAFLOW blobs.download FROM COMMAND (account TEXT, id TEXT, name TEXT) AS request WITH (continuation = 'durable') AS BEGIN
+    LET session = CALL $core.session();
+    REQUIRE JSON_HAS(JSON_GET(session, 'accounts'), request.account) ELSE 'UnknownAccount';
+    LET url = URI_TEMPLATE_EXPAND(JSON_STRING(session, 'downloadUrl'), MAP('accountId' => request.account, 'blobId' => request.id, 'name' => request.name, 'type' => 'application/octet-stream'));
+    REQUIRE HTTPS_URL(url, $allowed_hosts) ELSE 'DestinationDenied';
+    RETURN EXECUTE HTTP DOWNLOAD url EFFECT CURRENT_REQUEST_ID() INTO BLOB $storage
+      WITH (authorization = $authorization, allowed_hosts = $allowed_hosts, max_bytes = 104857600, follow_redirects = FALSE) ON REPLAY OBSERVE ONLY;
+  END;
+  CREATE DATAFLOW blobs.upload FROM COMMAND (account TEXT, body BLOB_REF, type TEXT) AS request WITH (continuation = 'durable') AS BEGIN
+    LET session = CALL $core.session();
+    REQUIRE JSON_HAS(JSON_GET(session, 'accounts'), request.account) ELSE 'UnknownAccount';
+    LET url = URI_TEMPLATE_EXPAND(JSON_STRING(session, 'uploadUrl'), MAP('accountId' => request.account));
+    REQUIRE HTTPS_URL(url, $allowed_hosts) ELSE 'DestinationDenied';
+    LET result = EXECUTE HTTP UPLOAD url EFFECT CURRENT_REQUEST_ID() FROM BLOB request.body
+      WITH (authorization = $authorization, allowed_hosts = $allowed_hosts, content_type = request.type,
+        max_bytes = MIN(104857600, JSON_INTEGER(JSON_GET(JSON_GET(session, 'capabilities'), 'urn:ietf:params:jmap:core'), 'maxSizeUpload')), follow_redirects = FALSE) ON REPLAY OBSERVE ONLY;
+    REQUIRE result.outcome = 'known' AND result.status = 201 ELSE 'UploadUnconfirmed';
+    LET value = JSON_PARSE(result.body, max_bytes => 65536, duplicate_keys => 'reject');
+    REQUIRE JSON_STRING(value, 'accountId') = request.account AND JSON_TYPE(JSON_GET(value, 'blobId')) = 'string' ELSE 'InvalidUploadReceipt';
+    RETURN value;
+  END;
+  EXPORT DATAFLOW blobs.download AS download;
+  EXPORT DATAFLOW blobs.upload AS upload;
+END;

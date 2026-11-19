@@ -1,0 +1,88 @@
+CREATE PUBLIC INTERFACE Mail AS BEGIN
+  DATAFLOW query(type TEXT, position BIGINT) RETURNS RESULT<JSON, TEXT>;
+  DATAFLOW get(type TEXT, ids LIST<TEXT>) RETURNS RESULT<JSON, TEXT>;
+  DATAFLOW changes(type TEXT, state TEXT) RETURNS RESULT<JSON, TEXT>;
+END;
+CREATE PUBLIC MODULE Sync(binding SCHEMA_BINDING, mail MODULE Mail, type TEXT) AS BEGIN
+  BIND SCHEMA sync TO $binding;
+  REQUIRE $type IN ('Email', 'Mailbox') ELSE 'InvalidType';
+  CREATE PRIVATE DOCUMENT sync.objects (owner OWNER, id TEXT, value JSON, PRIMARY KEY(owner, id)) WITH (profile = 'versioned');
+  CREATE PRIVATE TABLE sync.index (owner OWNER, id TEXT, generation TEXT, deleted BOOLEAN, PRIMARY KEY(owner, id));
+  CREATE PRIVATE TABLE sync.cursors (owner OWNER PRIMARY KEY, state TEXT, running BOOLEAN, generation TEXT);
+  CREATE PRIVATE QUEUE sync.jobs (owner OWNER, generation TEXT, state TEXT, position BIGINT, query_state OPTION<TEXT>, initial_state OPTION<TEXT>) WITH (max_attempts = 1);
+  CREATE PRIVATE STREAM sync.changes (event_id TEXT, owner OWNER, id TEXT, action TEXT)
+    WITH (retention = 'unlimited', partition_by = 'owner', disclosure = 'current_owner');
+  CREATE DATAFLOW sync.refresh FROM COMMAND () AS request AS BEGIN ATOMIC
+    INSERT INTO sync.cursors VALUES (CURRENT_OWNER(), '', FALSE, '') ON CONFLICT DO NOTHING;
+    LET cursor = SELECT ONE * FROM sync.cursors WHERE owner = CURRENT_OWNER();
+    REQUIRE NOT cursor.running ELSE 'SyncInProgress';
+    LET generation = NEW_ID();
+    UPDATE sync.cursors SET running = TRUE, generation = generation WHERE owner = CURRENT_OWNER();
+    ENQUEUE INTO sync.jobs VALUES (CURRENT_OWNER(), generation, cursor.state, 0, NONE, NONE);
+  END;
+  CREATE DATAFLOW sync.page FROM QUEUE sync.jobs AS job AS BEGIN
+    VAR next_state = job.state; VAR ids = LIST<TEXT>(); VAR removed = LIST<TEXT>(); VAR more = FALSE;
+    VAR query_state = job.query_state; VAR initial_state = job.initial_state;
+    IF job.state = '' THEN
+      -- Establish a type state before enumerating; replay changes from that state
+      -- after the stable query snapshot so edits during the scan are not lost.
+      IF NOT IS_PRESENT(initial_state) THEN SET initial_state = SOME(JSON_STRING(REQUIRE_OK(CALL $mail.get($type, [])), 'state')); END IF;
+      LET query = REQUIRE_OK(CALL $mail.query($type, job.position));
+      REQUIRE NOT IS_PRESENT(query_state) OR REQUIRE_SOME(query_state) = JSON_STRING(query, 'queryState') ELSE 'SnapshotChanged';
+      SET query_state = SOME(JSON_STRING(query, 'queryState'));
+      SET ids = JSON_STRING_LIST(query, 'ids');
+      SET more = job.position + LENGTH(ids) < JSON_INTEGER(query, 'total');
+      REQUIRE NOT more OR LENGTH(ids) > 0 ELSE 'NonAdvancingCursor';
+    ELSE
+      LET result = CALL $mail.changes($type, job.state);
+      IF result = ERR('cannotCalculateChanges') THEN
+        BEGIN ATOMIC ENQUEUE INTO sync.jobs VALUES (job.owner, job.generation, '', 0, NONE, NONE); END;
+        RETURN;
+      END IF;
+      LET changes = REQUIRE_OK(result);
+      REQUIRE JSON_STRING(changes, 'oldState') = job.state ELSE 'StateMismatch';
+      SET next_state = JSON_STRING(changes, 'newState');
+      SET ids = UNIQUE(APPEND(JSON_STRING_LIST(changes, 'created'), JSON_STRING_LIST(changes, 'updated')));
+      SET removed = JSON_STRING_LIST(changes, 'destroyed');
+      SET more = JSON_BOOLEAN(changes, 'hasMoreChanges');
+      REQUIRE NOT more OR next_state <> job.state ELSE 'NonAdvancingCursor';
+    END IF;
+    LET fetched = REQUIRE_OK(CALL $mail.get($type, ids));
+    SET removed = UNIQUE(APPEND(removed, JSON_STRING_LIST(fetched, 'notFound')));
+    BEGIN ATOMIC
+      REQUIRE (SELECT ONE generation FROM sync.cursors WHERE owner = job.owner).generation = job.generation ELSE 'StaleSync';
+      FOR record IN JSON_ARRAY(fetched, 'list') DO
+        LET id = JSON_STRING(record, 'id'); REQUIRE CONTAINS(ids, id) ELSE 'UnexpectedObject';
+        UPSERT INTO sync.objects VALUES (job.owner, id, record);
+        UPSERT INTO sync.index VALUES (job.owner, id, job.generation, FALSE);
+        PRODUCE INTO sync.changes VALUES (OPERATION_ID(CURRENT_REQUEST_ID(), id), job.owner, id, 'updated');
+      END FOR;
+      FOR id IN removed DO
+        UPDATE sync.index SET deleted = TRUE WHERE owner = job.owner AND id = id;
+        PRODUCE INTO sync.changes VALUES (OPERATION_ID(CURRENT_REQUEST_ID(), id || ':delete'), job.owner, id, 'deleted');
+      END FOR;
+      IF job.state = '' AND more THEN
+        ENQUEUE INTO sync.jobs VALUES (job.owner, job.generation, '', job.position + LENGTH(ids), query_state, initial_state);
+      ELSEIF job.state = '' THEN
+        LET stale = SELECT MANY * FROM sync.index WHERE owner = job.owner AND generation <> job.generation AND NOT deleted LIMIT 1001;
+        REQUIRE LENGTH(stale) <= 1000 ELSE 'MirrorLimit';
+        FOR item IN stale DO
+          UPDATE sync.index SET deleted = TRUE WHERE owner = job.owner AND id = item.id;
+          PRODUCE INTO sync.changes VALUES (OPERATION_ID(job.generation, item.id || ':delete'), job.owner, item.id, 'deleted');
+        END FOR;
+        ENQUEUE INTO sync.jobs VALUES (job.owner, job.generation, REQUIRE_SOME(initial_state), 0, NONE, NONE);
+      ELSE
+        UPDATE sync.cursors SET state = next_state, running = more WHERE owner = job.owner;
+        IF more THEN ENQUEUE INTO sync.jobs VALUES (job.owner, job.generation, next_state, 0, NONE, NONE); END IF;
+      END IF;
+    END;
+  ON FAILURE failure
+    BEGIN ATOMIC
+      UPDATE sync.cursors SET running = FALSE, state = '' WHERE owner = job.owner AND generation = job.generation;
+      PRODUCE INTO sync.changes VALUES (job.generation || ':failed', job.owner, '', 'sync_failed');
+    END;
+  END;
+  CREATE PUBLIC VIEW objects AS SELECT o.id, o.value FROM sync.objects o JOIN sync.index i ON i.owner = o.owner AND i.id = o.id WHERE o.owner = CURRENT_OWNER() AND NOT i.deleted;
+  EXPORT DATAFLOW sync.refresh AS refresh;
+  EXPORT STREAM sync.changes AS changes;
+END;

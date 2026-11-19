@@ -1,0 +1,68 @@
+CREATE PUBLIC TYPE Call AS ROW(name TEXT, arguments JSON, id TEXT);
+CREATE PUBLIC MODULE Core(binding SCHEMA_BINDING, session_url TEXT, allowed_hosts SET<TEXT>, authorization HTTP_AUTH_CAPABILITY) AS BEGIN
+  BIND SCHEMA jmap TO $binding;
+  CREATE PRIVATE DOCUMENT jmap.sessions (owner OWNER PRIMARY KEY, value JSON) WITH (profile = 'versioned');
+  CREATE PRIVATE STREAM jmap.results (event_id TEXT, owner OWNER, kind TEXT)
+    WITH (retention = 'unlimited', partition_by = 'owner', disclosure = 'current_owner');
+  CREATE SINK jmap.http INTO HTTP WITH (dynamic_endpoint = TRUE, allowed_hosts = $allowed_hosts, authorization = $authorization,
+    response = 'protected_bytes', response_max_bytes = 1048576, request_timeout = '30s', follow_redirects = FALSE,
+    max_attempts = 1, unknown_outcome = 'retain', capture = 'redacted_metadata');
+  CREATE DATAFLOW jmap.connect FROM COMMAND () AS request WITH (continuation = 'durable') AS BEGIN
+    REQUIRE HTTPS_URL($session_url, $allowed_hosts) ELSE 'DestinationDenied';
+    LET receipt = EXECUTE SINK jmap.http EFFECT CURRENT_REQUEST_ID() METHOD 'GET' ENDPOINT $session_url ON REPLAY OBSERVE ONLY;
+    REQUIRE receipt.outcome = 'known' AND receipt.status = 200 ELSE 'SessionUnavailable';
+    LET value = JSON_PARSE_PROTECTED(receipt.body, max_bytes => 1048576, max_depth => 32, duplicate_keys => 'reject');
+    REQUIRE JSON_TYPE(JSON_GET(value, 'accounts')) = 'object' AND JSON_HAS(JSON_GET(value, 'capabilities'), 'urn:ietf:params:jmap:core') ELSE 'InvalidSession';
+    FOR field IN ['apiUrl', 'downloadUrl', 'uploadUrl', 'eventSourceUrl'] DO
+      REQUIRE HTTPS_URI_TEMPLATE(JSON_STRING(value, field), $allowed_hosts) ELSE 'DestinationDenied';
+    END FOR;
+    BEGIN ATOMIC
+      UPSERT INTO jmap.sessions VALUES (CURRENT_OWNER(), value);
+      PRODUCE INTO jmap.results VALUES (CURRENT_REQUEST_ID(), CURRENT_OWNER(), 'session');
+    END;
+  END;
+  CREATE DATAFLOW jmap.session FROM COMMAND () AS request AS BEGIN ATOMIC
+    RETURN (SELECT ONE value FROM jmap.sessions WHERE owner = CURRENT_OWNER()).value;
+  END;
+  CREATE DATAFLOW jmap.call FROM COMMAND (using SET<TEXT>, calls LIST<Call>) AS request WITH (continuation = 'durable') AS BEGIN
+    LET session = SELECT ONE * FROM jmap.sessions WHERE owner = CURRENT_OWNER();
+    LET revision = DOCUMENT_REVISION(jmap.sessions, CURRENT_OWNER());
+    LET capabilities = JSON_GET(session.value, 'capabilities');
+    REQUIRE CONTAINS(request.using, 'urn:ietf:params:jmap:core') AND ALL(request.using, capability => JSON_HAS(capabilities, capability)) ELSE 'UnsupportedCapability';
+    LET limits = JSON_GET(capabilities, 'urn:ietf:params:jmap:core');
+    REQUIRE LENGTH(request.calls) BETWEEN 1 AND MIN(64, JSON_INTEGER(limits, 'maxCallsInRequest')) ELSE 'TooManyCalls';
+    VAR seen = SET<TEXT>(); VAR methods = LIST<JSON>();
+    FOR call IN request.calls DO
+      REQUIRE REGEX_MATCH(call.name, '^[A-Za-z][A-Za-z0-9]*/[A-Za-z][A-Za-z0-9]*$') AND NOT CONTAINS(seen, call.id) AND LENGTH(call.id) BETWEEN 1 AND 64 ELSE 'InvalidCall';
+      REQUIRE JSON_TYPE(call.arguments) = 'object' ELSE 'InvalidArguments';
+      FOR name IN JSON_KEYS(call.arguments) DO
+        IF STARTS_WITH(name, '#') THEN
+          LET reference = JSON_GET(call.arguments, name);
+          REQUIRE NOT JSON_HAS(call.arguments, SUBSTRING(name, 1)) AND CONTAINS(seen, JSON_STRING(reference, 'resultOf'))
+            AND STARTS_WITH(JSON_STRING(reference, 'path'), '/') AND JSON_TYPE(JSON_GET(reference, 'name')) = 'string' ELSE 'InvalidResultReference';
+        END IF;
+      END FOR;
+      IF JSON_HAS(call.arguments, 'accountId') THEN REQUIRE JSON_HAS(JSON_GET(session.value, 'accounts'), JSON_STRING(call.arguments, 'accountId')) ELSE 'UnknownAccount'; END IF;
+      SET seen = SET_ADD(seen, call.id);
+      SET methods = APPEND(methods, JSON_FROM_LIST([JSON_FROM(call.name), call.arguments, JSON_FROM(call.id)]));
+    END FOR;
+    LET body = JSON_ENCODE(JSON_OBJECT('using', JSON_FROM_LIST(SORT(request.using)), 'methodCalls', JSON_FROM_LIST(methods)));
+    REQUIRE LENGTH(body) <= MIN(1048576, JSON_INTEGER(limits, 'maxSizeRequest')) ELSE 'RequestTooLarge';
+    LET receipt = EXECUTE SINK jmap.http EFFECT CURRENT_REQUEST_ID() METHOD 'POST' ENDPOINT JSON_STRING(session.value, 'apiUrl')
+      GUARD DOCUMENT_REVISION(jmap.sessions, CURRENT_OWNER()) = revision HEADERS MAP('Content-Type' => 'application/json') BODY body ON REPLAY OBSERVE ONLY;
+    REQUIRE receipt.outcome <> 'unknown' ELSE 'CallUnknown';
+    REQUIRE receipt.outcome = 'known' AND receipt.status = 200 ELSE 'RequestRefused';
+    LET value = JSON_PARSE_PROTECTED(receipt.body, max_bytes => 1048576, max_depth => 32, duplicate_keys => 'reject');
+    LET responses = JSON_ARRAY(value, 'methodResponses');
+    REQUIRE LENGTH(responses) <= 256 ELSE 'TooManyResponses';
+    FOR response IN responses DO
+      REQUIRE JSON_ARRAY_LENGTH(response) = 3 AND CONTAINS(seen, JSON_AS_STRING(JSON_ARRAY_AT(response, 2))) ELSE 'InvalidResponse';
+    END FOR;
+    BEGIN ATOMIC PRODUCE INTO jmap.results VALUES (CURRENT_REQUEST_ID(), CURRENT_OWNER(), 'response'); END;
+    RETURN value;
+  END;
+  EXPORT DATAFLOW jmap.connect AS connect;
+  EXPORT DATAFLOW jmap.session AS session;
+  EXPORT DATAFLOW jmap.call AS call;
+  EXPORT STREAM jmap.results AS results;
+END;

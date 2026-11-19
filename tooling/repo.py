@@ -20,6 +20,7 @@ PACKAGES = {
     "saml": set(),
     "scim": set(),
     "webauthn": set(),
+    "jmap": set(),
     "carddav": {"vcard", "webdav"},
     "caldav": {"icalendar", "webdav"},
     "vcard": set(),
