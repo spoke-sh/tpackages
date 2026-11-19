@@ -6,6 +6,29 @@ TEST 'multistatus preserves property errors instead of treating 207 as total suc
   ASSERT response.resources[0].errors['{DAV:}displayname'] = 404;
   ASSERT XML_TEXT(response.resources[0].properties['{DAV:}getetag']) = '"1"';
 END;
+
+TEST 'a failed rescan preserves previously fetched objects and owner isolation' USING MODULES (application) AS BEGIN
+  LET transport = USE library.Client(SCHEMA_BINDING('sync_transport'), 'https://dav.example.test', HTTP_AUTH_SETTING('example.dav'));
+  LET mirror = USE library.Sync(SCHEMA_BINDING('sync_mirror'), transport, 'https://dav.example.test/book/', TRUE);
+  ACTIVATE TEST MODULE transport;
+  ACTIVATE TEST MODULE mirror;
+  SET TEST OWNER 'one';
+  MOCK SINK transport.http WHEN METHOD 'REPORT' RETURNS STATUS 207 BODY UTF8_ENCODE('<d:multistatus xmlns:d="DAV:"><d:response><d:href>/book/a</d:href><d:propstat><d:prop><d:getetag>"1"</d:getetag></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response><d:sync-token>https://dav.example.test/state/1</d:sync-token></d:multistatus>');
+  MOCK SINK transport.http WHEN METHOD 'GET' RETURNS STATUS 200 HEADERS MAP('ETag' => '"1"') BODY UTF8_ENCODE('owner-one');
+  CALL mirror.refresh();
+  DRAIN MODULE mirror WITHIN 100 STEPS;
+  ASSERT CALL mirror.read('https://dav.example.test/book/a') = UTF8_ENCODE('owner-one');
+  SET TEST OWNER 'two';
+  ASSERT CALL mirror.read('https://dav.example.test/book/a') FAILS;
+  MOCK SINK transport.http WHEN METHOD 'GET' RETURNS STATUS 200 HEADERS MAP('ETag' => '"1"') BODY UTF8_ENCODE('owner-two');
+  CALL mirror.refresh();
+  DRAIN MODULE mirror WITHIN 100 STEPS;
+  SET TEST OWNER 'one';
+  MOCK SINK transport.http WHEN METHOD 'REPORT' RETURNS STATUS 500 BODY BYTES '';
+  CALL mirror.refresh();
+  DRAIN MODULE mirror WITHIN 100 STEPS;
+  ASSERT CALL mirror.read('https://dav.example.test/book/a') = UTF8_ENCODE('owner-one');
+END;
 TEST 'foreign response hrefs refuse before follow-up requests' USING MODULES (application) AS BEGIN
   ASSERT codec.multistatus(UTF8_ENCODE('<d:multistatus xmlns:d="DAV:"><d:response><d:href>https://attacker.example.test/x</d:href><d:status>HTTP/1.1 200 OK</d:status></d:response></d:multistatus>'), 'https://dav.example.test/book/', SET('dav.example.test')) FAILS WITH 'InvalidHref';
 END;
