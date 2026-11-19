@@ -1,0 +1,18 @@
+-- Target-language lazy exports: docs/target-language.md (TP-01, TP-02).
+EXPORT MODULE Client FROM './src/client.transit';
+EXPORT MODULE StaticProvider FROM './src/provider.transit';
+EXPORT TYPE Configuration FROM './src/types.transit';
+EXPORT TYPE ProviderMetadata FROM './src/types.transit';
+EXPORT TYPE AuthorizationId FROM './src/types.transit';
+EXPORT TYPE CredentialId FROM './src/types.transit';
+EXPORT TYPE OperationId FROM './src/types.transit';
+EXPORT TYPE Outcome FROM './src/types.transit';
+EXPORT TYPE Grant FROM './src/types.transit';
+EXPORT INTERFACE Provider FROM './src/provider.transit';
+EXPORT TEST SUITE ClientContract FROM './tests/client.test.transit';
+EXPORT TARGET default FROM './examples/build.transit';
+EXPORT TEST TARGET tests FROM './tests/build.transit';
+EXPORT MODULE Http FROM './src/http.transit';
+EXPORT MODULE Publication FROM './src/publication.transit';
+EXPORT TEST SUITE HttpContract FROM './tests/http.test.transit';
+EXPORT TARGET http FROM './examples/build.transit';

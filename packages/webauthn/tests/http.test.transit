@@ -1,0 +1,22 @@
+TEST 'HTTP ceremony initiation checks origin and strict JSON before command admission'
+  USING MODULES (app) AS BEGIN
+  ACTIVATE TEST MODULE app;
+  SET TEST OWNER 'example-user';
+  LET body = SOME('{"user_handle":"dXNlci0x","user_name":"alice","display_name":"Alice"}');
+  LET denied = SIMULATE HTTP SOURCE app.http.begin_registration(ROW(method => 'POST',
+    headers => MAP('Origin' => 'https://foreign.example.test', 'Content-Type' => 'application/json'),
+    raw_body => body));
+  ASSERT denied.status = 403;
+  LET headers = MAP('Origin' => 'https://app.example.test', 'Content-Type' => 'application/json');
+  LET duplicate = SIMULATE HTTP SOURCE app.http.begin_registration(ROW(method => 'POST', headers => headers,
+    raw_body => SOME('{"user_handle":"dXNlci0x","user_name":"alice","user_name":"other","display_name":"Alice"}')));
+  ASSERT duplicate.status = 400;
+  LET options = SIMULATE HTTP SOURCE app.http.begin_registration(ROW(method => 'POST', headers => headers, raw_body => body));
+  ASSERT options.status = 200;
+  ASSERT options.headers['Cache-Control'] = 'no-store';
+  ASSERT HTTP COOKIE options '__Host-tpackages_webauthn' HAS ATTRIBUTES
+    (secure = TRUE, http_only = TRUE, same_site = 'Strict', path = '/');
+  ASSERT (SELECT COUNT(*) FROM app.api.credential_metadata) = 0;
+  ASSERT (SELECT COUNT(*) FROM TEST STREAM app.api.completions) = 0;
+  ASSERT NO SECRET IN LOGS;
+END;

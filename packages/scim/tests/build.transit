@@ -1,0 +1,7 @@
+IMPORT example FROM '../examples/build.transit';
+IMPORT supplied FROM './application-store.transit';
+LET application = USE example.Application();
+LET custom = USE supplied.Application();
+EXPORT TARGET default_store AS TESTS OF application USING SUITES ('./provisioning.test.transit', './filter.test.transit');
+EXPORT TARGET application_store AS TESTS OF custom USING SUITES ('./provisioning.test.transit');
+EXPORT TEST TARGET tests AS GROUP (default_store, application_store);

@@ -1,0 +1,54 @@
+IMPORT library FROM '../build.transit';
+
+EXPORT MODULE Application() AS BEGIN
+  LET provider = USE library.StaticProvider(ROW(
+    name => 'example', issuer => 'https://identity.example.test',
+    authorization_endpoint => 'https://identity.example.test/authorize',
+    token_endpoint => 'https://identity.example.test/token',
+    revocation_endpoint => SOME('https://identity.example.test/revoke'),
+    token_method => 'POST', token_encoding => 'form', client_auth => 'client_secret_post',
+    scope_separator => ' ', response_scope_separator => ' ', pkce_s256 => TRUE,
+    refresh => TRUE, issuer_parameter => FALSE, authorization_parameter_names => SET()
+  ));
+  LET api = USE library.Client(SCHEMA_BINDING('example_oauth'), provider, ROW(
+    client_id => 'example-client', client_secret => 'example.oauth.client_secret',
+    redirect_uri => 'https://app.example.test/callback/example', scopes => SET('read'),
+    challenge_seconds => 300, credential_seconds => 86400,
+    allowed_hosts => SET('identity.example.test'), authorization_parameters => MAP()
+  ));
+  BIND SCHEMA consumer TO SCHEMA_BINDING('example_oauth_consumer');
+  CREATE PRIVATE TABLE consumer.results (id TEXT PRIMARY KEY, owner OWNER, observed_at TIMESTAMP);
+  CREATE DATAFLOW consumer.observe FROM STREAM api.completions AS event
+    WITH (consumer = 'example.results', required = TRUE, checkpoint = 'terminal_atomic') AS BEGIN ATOMIC
+    INSERT INTO consumer.results VALUES (CAST(event.event_id AS TEXT), event.owner, event.observed_at)
+      ON CONFLICT (id) DO ASSERT SAME ROW;
+  END;
+  CREATE VIEW consumer.observed AS SELECT * FROM consumer.results WHERE owner = CURRENT_OWNER();
+  EXPORT VIEW consumer.observed AS observed;
+  AUTHORIZE MODULE api WITH (
+    commands = ROLE SETTING('example.command_role'), state = ROLE SETTING('example.state_role'),
+    effects = ROLE SETTING('example.effect_role'), reads = ROLE SETTING('example.read_role'),
+    maintenance = ROLE SETTING('example.maintenance_role')
+  );
+  AUTHORIZE DATAFLOW consumer.observe AS ROLE SETTING('example.consumer_role');
+  ACTIVATE MODULE api;
+  ACTIVATE DATAFLOW consumer.observe;
+  EXPORT MODULE api AS api;
+END;
+
+LET application = USE Application();
+EXPORT TARGET default AS SQL OF application;
+
+-- Select this target only when the application wants native HTTP routes.
+EXPORT MODULE HttpApplication() AS BEGIN
+  LET core = USE Application();
+  LET http = USE library.Http(SCHEMA_BINDING('example_oauth_http'), core.api,
+    'https://app.example.test', '/login/oauth', '/callback/example');
+  AUTHORIZE MODULE http WITH (sources = ROLE SETTING('example.http_role'));
+  ACTIVATE MODULE http;
+  EXPORT MODULE core.api AS api;
+  EXPORT VIEW core.observed AS observed;
+  EXPORT MODULE http AS http;
+END;
+LET browser = USE HttpApplication();
+EXPORT TARGET http AS SQL OF browser;

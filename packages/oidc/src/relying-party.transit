@@ -1,0 +1,47 @@
+IMPORT oauth FROM PACKAGE oauth FILE 'build.transit';
+IMPORT types FROM './types.transit';
+IMPORT validation FROM './validation.transit';
+
+CREATE PUBLIC MODULE RelyingParty(binding SCHEMA_BINDING, config types.Configuration) AS BEGIN
+  BIND SCHEMA oidc TO $binding;
+  REQUIRE CONTAINS($config.oauth.scopes, 'openid') ELSE 'OpenIDScopeRequired';
+  REQUIRE $config.metadata_seconds > 0 AND $config.metadata_seconds <= 3600
+    AND $config.clock_skew_seconds >= 0 AND $config.clock_skew_seconds <= 120
+    AND $config.max_token_age_seconds > 0 AND $config.max_token_age_seconds <= 86400
+    AND OPTION_ALL($config.max_auth_age_seconds, value => value >= 0 AND value <= 86400)
+    ELSE 'InvalidLifetime';
+  REQUIRE HTTPS_URL($config.issuer, $config.oauth.allowed_hosts)
+    AND HTTPS_URL($config.jwks_uri, $config.oauth.allowed_hosts) ELSE 'InvalidEndpoint';
+  LET provider = USE oauth.StaticProvider(ROW(
+    name => 'oidc', issuer => $config.issuer, authorization_endpoint => $config.authorization_endpoint,
+    token_endpoint => $config.token_endpoint, revocation_endpoint => NONE,
+    token_method => 'POST', token_encoding => 'form', client_auth => $config.client_auth,
+    scope_separator => ' ', response_scope_separator => ' ', pkce_s256 => TRUE,
+    refresh => TRUE, issuer_parameter => FALSE, authorization_parameter_names => SET('prompt', 'max_age', 'login_hint')
+  ));
+  LET authorization_parameters = MATCH $config.max_auth_age_seconds WHEN NONE THEN $config.oauth.authorization_parameters
+    WHEN SOME(value) THEN MAP_SET($config.oauth.authorization_parameters, 'max_age', CAST(value AS TEXT)) END;
+  LET core = USE oauth.Client(CHILD_BINDING($binding, 'oauth'), provider,
+    $config.oauth WITH (authorization_parameters = authorization_parameters));
+  -- These are internal invocation requirements, bound to this instance's flows;
+  -- they are not grants to callers of the relying party.
+  REQUIRE CAPABILITY INVOKE core.issue_challenge FOR DATAFLOW oidc.begin_authentication;
+  REQUIRE CAPABILITY INVOKE core.token_material FOR DATAFLOW oidc.verify_identity;
+  REQUIRE CAPABILITY INVOKE core.credential FOR DATAFLOW oidc.verify_identity;
+  REQUIRE CAPABILITY CONSUME core.completions FOR DATAFLOW oidc.verify_identity;
+  DECLARE FROM './state.transit';
+  DECLARE FROM './discovery.transit';
+  DECLARE FROM './authentication.transit';
+  DECLARE FROM './reads.transit';
+  DECLARE FROM './maintenance.transit';
+  EXPORT DATAFLOW oidc.discover AS discover;
+  EXPORT DATAFLOW oidc.begin_authentication AS begin_authentication;
+  EXPORT DATAFLOW core.accept_callback AS accept_callback;
+  EXPORT STREAM oidc.completions AS completions;
+  EXPORT VIEW oidc.status AS status;
+  EXPORT FUNCTION oidc.outcome AS outcome;
+  EXPORT FUNCTION oidc.discovery_status AS discovery_status;
+  EXPORT SINK core.token AS token;
+  EXPORT SINK oidc.configuration AS configuration;
+  EXPORT SINK oidc.jwks AS jwks;
+END;

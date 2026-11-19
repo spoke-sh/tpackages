@@ -1,0 +1,140 @@
+TEST 'HTTP duplicate fields and unknown discovery resources preserve SCIM error encoding'
+  USING MODULES (app) AS BEGIN
+  ACTIVATE TEST MODULE app;
+  SET TEST OWNER 'example-provisioner';
+  LET duplicate = SIMULATE HTTP app.http(ROW(method => 'GET', path => '/scim/v2/Users',
+    raw_query => 'count=1&count=2', headers => MAP(), raw_body => NONE));
+  ASSERT duplicate.status = 400;
+  ASSERT duplicate.headers['Content-Type'] = 'application/scim+json';
+  ASSERT JSON_STRING(REQUIRE_SOME(duplicate.body), 'scimType') = 'invalidSyntax';
+  LET missing = SIMULATE HTTP app.http(ROW(method => 'GET', path => '/scim/v2/ResourceTypes/Missing',
+    query => MAP(), headers => MAP(), body => NONE));
+  ASSERT missing.status = 404;
+  ASSERT JSON_STRING(REQUIRE_SOME(missing.body), 'status') = '404';
+  ASSERT (SELECT COUNT(*) FROM TEST STREAM app.api.changes) = 0;
+END;
+
+TEST 'create, filter, conditionally update, and delete a user'
+  USING MODULES (app) AS BEGIN
+  ACTIVATE TEST MODULE app;
+  SET TEST OWNER 'example-provisioner';
+  LET created = SIMULATE HTTP app.http(ROW(method => 'POST', path => '/scim/v2/Users', query => MAP(), headers => MAP(),
+    body => SOME(JSON '{"schemas":["urn:ietf:params:scim:schemas:core:2.0:User"],"userName":"Alice","active":true}')));
+  ASSERT created.status = 201;
+  LET id = JSON_STRING(REQUIRE_SOME(created.body), 'id');
+  LET listed = SIMULATE HTTP app.http(ROW(method => 'GET', path => '/scim/v2/Users',
+    query => MAP('filter' => 'userName eq "alice"', 'count' => '0'), headers => MAP(), body => NONE));
+  ASSERT JSON_INTEGER(REQUIRE_SOME(listed.body), 'totalResults') = 1;
+  ASSERT JSON_INTEGER(REQUIRE_SOME(listed.body), 'itemsPerPage') = 0;
+  LET updated = SIMULATE HTTP app.http(ROW(method => 'PATCH', path => '/scim/v2/Users/' || id, query => MAP(),
+    headers => MAP('If-Match' => created.headers['ETag']),
+    body => SOME(JSON '{"schemas":["urn:ietf:params:scim:api:messages:2.0:PatchOp"],"Operations":[{"op":"replace","path":"active","value":false}]}')));
+  ASSERT updated.status = 200;
+  ASSERT JSON_BOOLEAN(REQUIRE_SOME(updated.body), 'active') = FALSE;
+  LET stale = SIMULATE HTTP app.http(ROW(method => 'DELETE', path => '/scim/v2/Users/' || id, query => MAP(),
+    headers => MAP('If-Match' => created.headers['ETag']), body => NONE));
+  ASSERT stale.status = 412;
+  LET removed = SIMULATE HTTP app.http(ROW(method => 'DELETE', path => '/scim/v2/Users/' || id, query => MAP(),
+    headers => MAP('If-Match' => updated.headers['ETag']), body => NONE));
+  ASSERT removed.status = 204;
+END;
+
+TEST 'PATCH rollback preserves all earlier values when a later operation fails'
+  USING MODULES (app) AS BEGIN
+  ACTIVATE TEST MODULE app;
+  SET TEST OWNER 'example-provisioner';
+  LET created = SIMULATE HTTP app.http(ROW(method => 'POST', path => '/scim/v2/Users', query => MAP(), headers => MAP(),
+    body => SOME(JSON '{"schemas":["urn:ietf:params:scim:schemas:core:2.0:User"],"userName":"Alice","active":true}')));
+  LET id = JSON_STRING(REQUIRE_SOME(created.body), 'id');
+  LET changed = SIMULATE HTTP app.http(ROW(method => 'PATCH', path => '/scim/v2/Users/' || id, query => MAP(), headers => MAP(),
+    body => SOME(JSON '{"schemas":["urn:ietf:params:scim:api:messages:2.0:PatchOp"],"Operations":[{"op":"replace","path":"active","value":false},{"op":"remove","path":"userName"}]}')));
+  ASSERT changed.status = 400;
+  LET current = SIMULATE HTTP app.http(ROW(method => 'GET', path => '/scim/v2/Users/' || id, query => MAP(), headers => MAP(), body => NONE));
+  ASSERT JSON_BOOLEAN(REQUIRE_SOME(current.body), 'active') = TRUE;
+  ASSERT current.headers['ETag'] = created.headers['ETag'];
+END;
+
+TEST 'authorization and case-insensitive username uniqueness precede mutation'
+  USING MODULES (app) AS BEGIN
+  ACTIVATE TEST MODULE app;
+  SET TEST OWNER 'untrusted';
+  LET request = ROW(method => 'POST', path => '/scim/v2/Users', query => MAP(), headers => MAP(),
+    body => SOME(JSON '{"schemas":["urn:ietf:params:scim:schemas:core:2.0:User"],"userName":"Alice"}'));
+  ASSERT (SIMULATE HTTP app.http(request)).status = 403;
+  SET TEST OWNER 'example-provisioner';
+  ASSERT (SIMULATE HTTP app.http(request)).status = 201;
+  LET duplicate = request WITH (body = SOME(JSON '{"schemas":["urn:ietf:params:scim:schemas:core:2.0:User"],"USERNAME":"alice"}'));
+  ASSERT (SIMULATE HTTP app.http(duplicate)).status = 409;
+END;
+
+TEST 'group membership requires existing users and follows deletion atomically'
+  USING MODULES (app) AS BEGIN
+  ACTIVATE TEST MODULE app;
+  SET TEST OWNER 'example-provisioner';
+  LET user = SIMULATE HTTP app.http(ROW(method => 'POST', path => '/scim/v2/Users', query => MAP(), headers => MAP(),
+    body => SOME(JSON '{"schemas":["urn:ietf:params:scim:schemas:core:2.0:User"],"userName":"Alice"}')));
+  LET user_id = JSON_STRING(REQUIRE_SOME(user.body), 'id');
+  LET group = SIMULATE HTTP app.http(ROW(method => 'POST', path => '/scim/v2/Groups', query => MAP(), headers => MAP(),
+    body => SOME(JSON_OBJECT('schemas', JSON_ARRAY_OF('urn:ietf:params:scim:schemas:core:2.0:Group'),
+      'displayName', 'Team', 'members', JSON_ARRAY_OF(JSON_OBJECT('value', user_id))))));
+  ASSERT group.status = 201;
+  LET group_id = JSON_STRING(REQUIRE_SOME(group.body), 'id');
+  ASSERT (SIMULATE HTTP app.http(ROW(method => 'DELETE', path => '/scim/v2/Users/' || user_id, query => MAP(), headers => MAP(), body => NONE))).status = 204;
+  LET current = SIMULATE HTTP app.http(ROW(method => 'GET', path => '/scim/v2/Groups/' || group_id, query => MAP(), headers => MAP(), body => NONE));
+  ASSERT JSON_ARRAY(REQUIRE_SOME(current.body), 'members', 1000) = [];
+  ASSERT current.headers['ETag'] <> group.headers['ETag'];
+END;
+
+TEST 'resource documents and native uniqueness roll back with their change events'
+  USING MODULES (app) AS BEGIN
+  ACTIVATE TEST MODULE app;
+  SET TEST OWNER 'example-provisioner';
+  LET race = RACE COMMANDS (
+    app.api.create_resource('Users', JSON '{"schemas":["urn:ietf:params:scim:schemas:core:2.0:User"],"userName":"Alice"}'),
+    app.api.create_resource('Users', JSON '{"schemas":["urn:ietf:params:scim:schemas:core:2.0:User"],"userName":"alice"}')
+  ) AT FIRST WRITE;
+  ASSERT race.accepted = 1;
+  ASSERT race.refusals = ['uniqueness'];
+  CRASH BEFORE CHECKPOINT CONSUMER 'example.results';
+  DRAIN MODULE app WITHIN 100 STEPS;
+  RESTART;
+  DRAIN MODULE app WITHIN 100 STEPS;
+  ASSERT (SELECT COUNT(*) FROM app.api.resources WHERE kind = 'Users') = 1;
+  ASSERT (SELECT COUNT(*) FROM TEST STREAM app.api.changes) = 1;
+  ASSERT (SELECT COUNT(*) FROM app.observed) = 1;
+END;
+
+TEST 'renaming a member changes the Group ETag and emits an atomic membership change'
+  USING MODULES (app) AS BEGIN
+  ACTIVATE TEST MODULE app;
+  SET TEST OWNER 'example-provisioner';
+  LET user = INVOKE COMMAND app.api.create_resource('Users',
+    JSON '{"schemas":["urn:ietf:params:scim:schemas:core:2.0:User"],"userName":"Alice"}');
+  LET id = JSON_STRING(REQUIRE_SOME(user.body), 'id');
+  LET group = INVOKE COMMAND app.api.create_resource('Groups', JSON_OBJECT(
+    'schemas', JSON_ARRAY_OF('urn:ietf:params:scim:schemas:core:2.0:Group'), 'displayName', 'Team',
+    'members', JSON_ARRAY_OF(JSON_OBJECT('value', id))));
+  LET group_id = JSON_STRING(REQUIRE_SOME(group.body), 'id');
+  INVOKE COMMAND app.api.patch_resource('Users', id, SOME(user.headers['ETag']),
+    JSON '{"schemas":["urn:ietf:params:scim:api:messages:2.0:PatchOp"],"Operations":[{"op":"replace","path":"userName","value":"Alice B"}]}');
+  LET read = INVOKE COMMAND app.api.get_resource('Groups', group_id, NONE, NONE);
+  ASSERT read.headers['ETag'] <> group.headers['ETag'];
+  ASSERT JSON_STRING(ONLY(JSON_ARRAY(REQUIRE_SOME(read.body), 'members', 1000)), 'display') = 'Alice B';
+  ASSERT (SELECT COUNT(*) FROM TEST STREAM app.api.changes WHERE id = group_id AND action = 'membership_changed') = 1;
+END;
+
+TEST 'a failed later PATCH emits no event and keeps both Table and Document values'
+  USING MODULES (app) AS BEGIN
+  ACTIVATE TEST MODULE app;
+  SET TEST OWNER 'example-provisioner';
+  LET user = INVOKE COMMAND app.api.create_resource('Users',
+    JSON '{"schemas":["urn:ietf:params:scim:schemas:core:2.0:User"],"userName":"Alice","active":true}');
+  LET id = JSON_STRING(REQUIRE_SOME(user.body), 'id');
+  ASSERT INVOKE COMMAND app.api.patch_resource('Users', id, SOME(user.headers['ETag']),
+    JSON '{"schemas":["urn:ietf:params:scim:api:messages:2.0:PatchOp"],"Operations":[{"op":"replace","path":"active","value":false},{"op":"remove","path":"userName"}]}') FAILS WITH 'invalidValue';
+  LET read = INVOKE COMMAND app.api.get_resource('Users', id, NONE, NONE);
+  ASSERT JSON_STRING(REQUIRE_SOME(read.body), 'userName') = 'Alice';
+  ASSERT JSON_BOOLEAN(REQUIRE_SOME(read.body), 'active');
+  ASSERT read.headers['ETag'] = user.headers['ETag'];
+  ASSERT (SELECT COUNT(*) FROM TEST STREAM app.api.changes) = 1;
+END;

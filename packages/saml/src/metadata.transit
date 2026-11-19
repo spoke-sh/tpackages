@@ -1,0 +1,27 @@
+-- Metadata is trusted only through an out-of-band content pin. Fetching metadata
+-- is application configuration work; arbitrary URLs in received XML are not read.
+CREATE PUBLIC FUNCTION read_metadata(xml TEXT, expected_sha256 BYTES, entity_id TEXT)
+  RETURNS ROW(entity_id TEXT, redirect_endpoint TEXT, signing_certificates LIST<BYTES>) AS BEGIN
+  REQUIRE SECURE_EQUAL(SHA256($xml), $expected_sha256) ELSE 'MetadataPinMismatch';
+  LET doc = XML_PARSE($xml, max_bytes => 262144, max_depth => 16, max_nodes => 2048,
+    dtd => FALSE, external_entities => FALSE, xinclude => FALSE, duplicate_ids => 'reject');
+  LET entity = XML_ROOT(doc, '{urn:oasis:names:tc:SAML:2.0:metadata}EntityDescriptor');
+  REQUIRE XML_ATTRIBUTE(entity, 'entityID') = $entity_id ELSE 'EntityMismatch';
+  LET descriptor = ONLY(XML_CHILDREN(entity, '{urn:oasis:names:tc:SAML:2.0:metadata}IDPSSODescriptor'));
+  REQUIRE CONTAINS(SPLIT(XML_ATTRIBUTE(descriptor, 'protocolSupportEnumeration'), ' '),
+    'urn:oasis:names:tc:SAML:2.0:protocol') ELSE 'UnsupportedProtocol';
+  LET service = ONLY(FILTER(XML_CHILDREN(descriptor, '{urn:oasis:names:tc:SAML:2.0:metadata}SingleSignOnService'),
+    node => XML_ATTRIBUTE(node, 'Binding') = 'urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect'));
+  LET endpoint = XML_ATTRIBUTE(service, 'Location');
+  REQUIRE HTTPS_URL(endpoint, SET(URL_HOST(endpoint))) ELSE 'InvalidEndpoint';
+  VAR certificates LIST<BYTES> = [];
+  FOR key IN XML_CHILDREN(descriptor, '{urn:oasis:names:tc:SAML:2.0:metadata}KeyDescriptor') DO
+    IF COALESCE(XML_OPTION_ATTRIBUTE(key, 'use'), 'signing') = 'signing' THEN
+      FOR certificate IN XML_DESCENDANTS(key, '{http://www.w3.org/2000/09/xmldsig#}X509Certificate', 8) DO
+        SET certificates = APPEND(certificates, BASE64_DECODE(XML_TEXT(certificate), max_bytes => 8192));
+      END FOR;
+    END IF;
+  END FOR;
+  REQUIRE LENGTH(certificates) > 0 AND LENGTH(certificates) <= 8 ELSE 'InvalidSigningKeys';
+  RETURN ROW(entity_id => $entity_id, redirect_endpoint => endpoint, signing_certificates => certificates);
+END;

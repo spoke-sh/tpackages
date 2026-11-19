@@ -1,0 +1,50 @@
+CREATE PUBLIC FUNCTION client_data(bytes BYTES, challenge BYTES, ceremony TEXT, origins SET<TEXT>)
+  RETURNS BYTES AS BEGIN
+  LET value = JSON_PARSE(UTF8_DECODE($bytes), max_bytes => 8192, max_depth => 4, duplicate_keys => 'reject');
+  REQUIRE JSON_STRING(value, 'type') = $ceremony ELSE 'WrongCeremony';
+  REQUIRE SECURE_EQUAL(BASE64URL_DECODE(JSON_STRING(value, 'challenge'), canonical => TRUE, max_bytes => 32), $challenge)
+    ELSE 'ChallengeMismatch';
+  REQUIRE CONTAINS($origins, JSON_STRING(value, 'origin')) ELSE 'OriginMismatch';
+  REQUIRE NOT COALESCE(JSON_OPTION_BOOLEAN(value, 'crossOrigin'), FALSE)
+    AND NOT JSON_HAS(value, 'topOrigin') ELSE 'CrossOriginUnsupported';
+  RETURN SHA256($bytes);
+END;
+
+CREATE PUBLIC FUNCTION decode_authenticator(bytes BYTES, registration BOOLEAN, rp_id TEXT, require_uv BOOLEAN)
+  RETURNS ROW(sign_count BIGINT, backup_eligible BOOLEAN, backed_up BOOLEAN,
+    credential_id OPTION<BYTES>, public_key OPTION<PUBLIC_KEY>) AS BEGIN
+  REQUIRE LENGTH($bytes) >= 37 AND LENGTH($bytes) <= 16384 ELSE 'InvalidAuthenticatorData';
+  REQUIRE SECURE_EQUAL(SLICE($bytes, 0, 32), SHA256(UTF8($rp_id))) ELSE 'RPIDMismatch';
+  LET flags = BYTE_AT($bytes, 32);
+  REQUIRE BIT_AND(flags, 1) <> 0 ELSE 'UserPresenceRequired';
+  REQUIRE NOT $require_uv OR BIT_AND(flags, 4) <> 0 ELSE 'UserVerificationRequired';
+  REQUIRE BIT_AND(flags, 34) = 0 ELSE 'ReservedAuthenticatorFlag';
+  LET backup_eligible = BIT_AND(flags, 8) <> 0;
+  LET backed_up = BIT_AND(flags, 16) <> 0;
+  REQUIRE NOT backed_up OR backup_eligible ELSE 'InvalidBackupFlags';
+  -- Initial profile negotiates no authenticator extensions.
+  REQUIRE BIT_AND(flags, 128) = 0 ELSE 'AuthenticatorExtensionsUnsupported';
+  REQUIRE (BIT_AND(flags, 64) <> 0) = $registration ELSE 'UnexpectedAttestedCredentialData';
+  LET sign_count = UINT32_BE(SLICE($bytes, 33, 4));
+  IF $registration THEN
+    REQUIRE LENGTH($bytes) >= 55 ELSE 'InvalidAttestedCredentialData';
+    LET size = UINT16_BE(SLICE($bytes, 53, 2));
+    REQUIRE size > 0 AND size <= 1023 AND LENGTH($bytes) > 55 + size ELSE 'InvalidCredentialId';
+    LET credential_id = SLICE($bytes, 55, size);
+    LET encoded = CBOR_DECODE_PREFIX(SLICE_FROM($bytes, 55 + size),
+      max_bytes => 8192, max_depth => 4, duplicate_keys => 'reject');
+    REQUIRE 55 + size + encoded.consumed = LENGTH($bytes) ELSE 'TrailingAuthenticatorData';
+    LET cose = encoded.value;
+    REQUIRE CBOR_INTEGER(cose, 1) = 2 AND CBOR_INTEGER(cose, 3) = -7
+      AND CBOR_INTEGER(cose, -1) = 1 ELSE 'UnsupportedCredentialAlgorithm';
+    REQUIRE LENGTH(CBOR_BYTES(cose, -2)) = 32 AND LENGTH(CBOR_BYTES(cose, -3)) = 32
+      ELSE 'InvalidCredentialKey';
+    LET key = EC_PUBLIC_KEY('P-256', CBOR_BYTES(cose, -2), CBOR_BYTES(cose, -3));
+    RETURN ROW(sign_count => sign_count, backup_eligible => backup_eligible, backed_up => backed_up,
+      credential_id => SOME(credential_id), public_key => SOME(key));
+  ELSE
+    REQUIRE LENGTH($bytes) = 37 ELSE 'TrailingAuthenticatorData';
+    RETURN ROW(sign_count => sign_count, backup_eligible => backup_eligible, backed_up => backed_up,
+      credential_id => NONE, public_key => NONE);
+  END IF;
+END;

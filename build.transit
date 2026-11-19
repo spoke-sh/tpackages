@@ -1,0 +1,41 @@
+-- Target workspace contract: docs/target-language.md.
+WORKSPACE tpackages AS BEGIN
+  PACKAGE oauth AT './packages/oauth';
+  PACKAGE oauth_facebook AT './packages/oauth-facebook';
+  PACKAGE oauth_google AT './packages/oauth-google';
+  PACKAGE oauth_github AT './packages/oauth-github';
+  PACKAGE oidc AT './packages/oidc';
+  PACKAGE saml AT './packages/saml';
+  PACKAGE scim AT './packages/scim';
+  PACKAGE webauthn AT './packages/webauthn';
+END;
+
+IMPORT oauth FROM PACKAGE oauth FILE 'build.transit';
+IMPORT oauth_facebook FROM PACKAGE oauth_facebook FILE 'build.transit';
+IMPORT oauth_google FROM PACKAGE oauth_google FILE 'build.transit';
+IMPORT oauth_github FROM PACKAGE oauth_github FILE 'build.transit';
+IMPORT oidc FROM PACKAGE oidc FILE 'build.transit';
+IMPORT saml FROM PACKAGE saml FILE 'build.transit';
+IMPORT scim FROM PACKAGE scim FILE 'build.transit';
+IMPORT webauthn FROM PACKAGE webauthn FILE 'build.transit';
+
+EXPORT TARGET default AS GROUP (
+  oauth.default,
+  oauth_facebook.default,
+  oauth_google.default,
+  oauth_github.default,
+  oidc.default,
+  saml.default,
+  scim.default,
+  webauthn.default
+);
+EXPORT TEST TARGET tests AS GROUP (
+  oauth.tests,
+  oauth_facebook.tests,
+  oauth_google.tests,
+  oauth_github.tests,
+  oidc.tests,
+  saml.tests,
+  scim.tests,
+  webauthn.tests
+);

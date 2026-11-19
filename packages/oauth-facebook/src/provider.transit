@@ -1,0 +1,22 @@
+IMPORT oauth FROM PACKAGE oauth FILE 'build.transit';
+
+CREATE PUBLIC MODULE Provider(api_version TEXT) AS BEGIN
+  REQUIRE MATCHES($api_version, '^v[0-9]{1,3}\\.[0-9]{1,2}$') ELSE 'InvalidAPIVersion';
+  LET implementation = USE oauth.StaticProvider(ROW(
+    name => 'facebook', issuer => 'https://www.facebook.com',
+    authorization_endpoint => 'https://www.facebook.com/' || $api_version || '/dialog/oauth',
+    token_endpoint => 'https://graph.facebook.com/' || $api_version || '/oauth/access_token',
+    revocation_endpoint => NONE, token_method => 'GET',
+    token_encoding => 'protected_query', client_auth => 'client_secret_post',
+    scope_separator => ',', response_scope_separator => ',',
+    pkce_s256 => TRUE, refresh => FALSE, issuer_parameter => FALSE,
+    authorization_parameter_names => SET('auth_type', 'display')
+  ));
+  EXPORT FUNCTION implementation.metadata AS metadata;
+  CREATE PUBLIC FUNCTION normalize(body SECRET<JSON>, requested SET<TEXT>) RETURNS oauth.Grant AS BEGIN
+    -- Facebook may return no scope field after partial consent. Do not claim
+    -- requested permissions were granted without a confirming response field.
+    RETURN implementation.normalize($body, CASE WHEN JSON_HAS($body, 'scope')
+      THEN $requested ELSE SET() END);
+  END;
+END;

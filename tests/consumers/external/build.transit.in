@@ -1,0 +1,7 @@
+-- Test harness substitutes an isolated local Git snapshot and its full revision.
+-- No developer checkout override is supplied to the compiler.
+DEPENDENCY github FROM '@REPOSITORY@'
+  REVISION '@REVISION@' SUBDIRECTORY 'packages/oauth-github';
+IMPORT github FROM PACKAGE github FILE 'build.transit';
+
+EXPORT TARGET default = github.default;

@@ -1,0 +1,5 @@
+-- Deliberately outside the pinned parser; no selected declaration refers here.
+CREATE PUBLIC TYPE FutureProtocolValue AS ROW(secret SECRET<TEXT>);
+CREATE PUBLIC TARGET default AS BEGIN
+  CREATE PRIVATE TABLE unrelated_values (id BIGINT PRIMARY KEY, value FutureProtocolValue);
+END;

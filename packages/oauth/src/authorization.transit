@@ -1,0 +1,70 @@
+-- OIDC uses this one atomic helper to create its nonce context in the same
+-- transaction. It has no external effect or continuation of its own.
+CREATE PROCEDURE oauth.issue_challenge(browser SECRET<TEXT>, nonce OPTION<TEXT>)
+  RETURNS ROW(id types.AuthorizationId, location TEXT, expires_at TIMESTAMP) AS BEGIN ATOMIC
+  REQUIRE LENGTH($browser) >= 32 ELSE 'BrowserBindingRequired';
+  REQUIRE OPTION_ALL($nonce, value => LENGTH(value) >= 32 AND LENGTH(value) <= 256) ELSE 'InvalidNonce';
+  LET policy = SELECT ONE * FROM oauth.policy WHERE id = 'client';
+  REQUIRE oauth.require_policy(policy._revision);
+  LET state = RANDOM_TOKEN(32);
+  LET verifier = RANDOM_SECRET(32, 'base64url');
+  LET id = types.AuthorizationId(HEX(SHA256(state)));
+  LET expires = NOW() + SECONDS($config.challenge_seconds);
+  LET secret = SECRET($config.client_secret);
+  PUT INTO oauth.challenges KEY id VALUE ROW(
+    owner => CURRENT_OWNER(), browser_hash => COMMITMENT($browser),
+    verifier => PROTECT(verifier, 'oauth.pkce', expires), nonce => $nonce,
+    expires_at => expires, policy_revision => policy._revision, secret_revision => secret.revision,
+    status => 'issued', operation => NONE
+  ) IF ABSENT;
+  INSERT INTO oauth.expiry VALUES (id, expires);
+  LET parameters = MAP_MERGE_DISJOINT(MAP(
+    'client_id' => $config.client_id, 'redirect_uri' => $config.redirect_uri, 'response_type' => 'code',
+    'scope' => JOIN(SORT($config.scopes), metadata.scope_separator), 'state' => state,
+    'code_challenge' => S256(verifier), 'code_challenge_method' => 'S256'), $config.authorization_parameters);
+  LET parameters = MATCH $nonce WHEN NONE THEN parameters
+    WHEN SOME(value) THEN MAP_SET(parameters, 'nonce', value) END;
+  RETURN ROW(id => id, location => URL_WITH_QUERY(metadata.authorization_endpoint, parameters), expires_at => expires);
+END;
+
+CREATE DATAFLOW oauth.begin_authorization FROM COMMAND (browser SECRET<TEXT>, nonce OPTION<TEXT>) AS request
+  WITH (idempotency = 'original_owner_request') AS BEGIN ATOMIC
+  RETURN CALL oauth.issue_challenge(request.browser, request.nonce);
+END;
+
+CREATE DATAFLOW oauth.accept_callback FROM COMMAND (
+  state TEXT, browser SECRET<TEXT>, redirect_uri TEXT, issuer OPTION<TEXT>,
+  code OPTION<SECRET<TEXT>>, error OPTION<TEXT>
+) AS request WITH (idempotency = 'original_owner_request') AS BEGIN ATOMIC
+  REQUIRE LENGTH(request.state) = 43 AND request.redirect_uri = $config.redirect_uri ELSE 'InvalidCallback';
+  LET id = types.AuthorizationId(HEX(SHA256(request.state)));
+  LET observed = MATCH (GET FROM oauth.challenges KEY id)
+    WHEN SOME(value) THEN value ELSE FAIL 'InvalidCallback' END;
+  LET challenge = observed.value;
+  REQUIRE oauth.require_challenge(challenge, request.browser);
+  REQUIRE (NOT metadata.issuer_parameter OR request.issuer = SOME(metadata.issuer))
+    AND OPTION_ALL(request.issuer, value => value = metadata.issuer) ELSE 'IssuerMismatch';
+  REQUIRE IS_PRESENT(request.code) <> IS_PRESENT(request.error) ELSE 'InvalidCallback';
+  LET operation = types.OperationId(OPERATION_ID(CURRENT_REQUEST_ID(), 'callback'));
+  INSERT INTO oauth.operations VALUES (operation, CURRENT_OWNER(), SOME(id), types.Outcome.Pending(operation));
+  PUT INTO oauth.challenges KEY id VALUE challenge WITH (status = 'claimed', operation = SOME(operation))
+    IF REVISION = observed.revision;
+  IF IS_PRESENT(request.error) THEN
+    PUT INTO oauth.challenges KEY id VALUE challenge WITH (status = 'refused', operation = SOME(operation));
+    DESTROY_PROTECTED(challenge.verifier);
+    CALL oauth.settle(operation, types.Outcome.Refused('ProviderDenied'));
+  ELSE
+    REQUIRE LENGTH(REQUIRE_SOME(request.code)) > 0 AND LENGTH(REQUIRE_SOME(request.code)) <= 16384 ELSE 'InvalidCode';
+    ENQUEUE INTO oauth.code_jobs VALUES (operation, CURRENT_OWNER(), id,
+      PROTECT(REQUIRE_SOME(request.code), 'oauth.code', challenge.expires_at),
+      challenge.policy_revision, challenge.secret_revision, challenge.expires_at);
+  END IF;
+  RETURN operation;
+END;
+
+CREATE PROCEDURE oauth.settle(operation types.OperationId, outcome types.Outcome) AS BEGIN ATOMIC
+  LET pending = SELECT ONE * FROM oauth.operations WHERE id = $operation AND owner = CURRENT_OWNER();
+  REQUIRE pending.outcome IS types.Outcome.Pending ELSE 'OperationAlreadySettled';
+  UPDATE oauth.operations SET outcome = $outcome WHERE id = $operation;
+  PRODUCE INTO oauth.completions VALUES ($operation, pending.owner, pending.authorization, $outcome, NOW());
+END;

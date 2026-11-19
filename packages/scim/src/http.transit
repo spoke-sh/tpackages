@@ -1,0 +1,154 @@
+IMPORT core FROM './service-provider.transit';
+IMPORT errors FROM './errors.transit';
+CREATE PUBLIC MODULE Http(binding SCHEMA_BINDING, api MODULE OF core.ServiceProvider, prefix TEXT) AS BEGIN
+  BIND SCHEMA transport TO $binding;
+  REQUIRE STARTS_WITH($prefix, '/') AND NOT ENDS_WITH($prefix, '/') ELSE 'InvalidRoutes';
+  CREATE SOURCE transport.users_list FROM HTTP REQUEST AS request
+    INTO COMMAND $api.list_resources('Users', HTTP_QUERY_OPTION_UNIQUE(request, 'filter'), INTEGER_PARSE(COALESCE(HTTP_QUERY_OPTION_UNIQUE(request, 'startIndex'), '1')), INTEGER_PARSE(COALESCE(HTTP_QUERY_OPTION_UNIQUE(request, 'count'), '100')))
+    WITH (method = 'GET', path = $prefix || '/Users', authentication = 'application',
+      accepted_content_types = SET('application/scim+json', 'application/json'), max_body_bytes = 65536,
+      max_path_bytes = 2048, max_headers = 32, allowed_query = SET('filter', 'startIndex', 'count'), duplicate_fields = 'reject',
+      request_storage = 'protected_transient', capture = 'redacted_metadata', response_cache = 'no-store',
+      response_status = RESULT.status, response_headers = RESULT.headers, response_body = RESULT.body,
+      error_encoder = errors.error_response);
+  EXPORT SOURCE transport.users_list AS users_list;
+  CREATE SOURCE transport.users_get FROM HTTP REQUEST AS request
+    INTO COMMAND $api.get_resource('Users', HTTP_PATH_TEXT(request, 'id'), HTTP_HEADER_OPTION_UNIQUE(request, 'if-match'), HTTP_HEADER_OPTION_UNIQUE(request, 'if-none-match'))
+    WITH (method = 'GET', path = $prefix || '/Users/{id}', authentication = 'application',
+      accepted_content_types = SET('application/scim+json', 'application/json'), max_body_bytes = 65536,
+      max_path_bytes = 2048, max_headers = 32, allowed_query = SET(), duplicate_fields = 'reject',
+      request_storage = 'protected_transient', capture = 'redacted_metadata', response_cache = 'no-store',
+      response_status = RESULT.status, response_headers = RESULT.headers, response_body = RESULT.body,
+      error_encoder = errors.error_response);
+  EXPORT SOURCE transport.users_get AS users_get;
+  CREATE SOURCE transport.users_create FROM HTTP REQUEST AS request
+    INTO COMMAND $api.create_resource('Users', HTTP_JSON_BODY(request))
+    WITH (method = 'POST', path = $prefix || '/Users', authentication = 'application',
+      accepted_content_types = SET('application/scim+json', 'application/json'), max_body_bytes = 65536,
+      max_path_bytes = 2048, max_headers = 32, allowed_query = SET(), duplicate_fields = 'reject',
+      request_storage = 'protected_transient', capture = 'redacted_metadata', response_cache = 'no-store',
+      response_status = RESULT.status, response_headers = RESULT.headers, response_body = RESULT.body,
+      error_encoder = errors.error_response);
+  EXPORT SOURCE transport.users_create AS users_create;
+  CREATE SOURCE transport.users_replace FROM HTTP REQUEST AS request
+    INTO COMMAND $api.replace_resource('Users', HTTP_PATH_TEXT(request, 'id'), HTTP_HEADER_OPTION_UNIQUE(request, 'if-match'), HTTP_JSON_BODY(request))
+    WITH (method = 'PUT', path = $prefix || '/Users/{id}', authentication = 'application',
+      accepted_content_types = SET('application/scim+json', 'application/json'), max_body_bytes = 65536,
+      max_path_bytes = 2048, max_headers = 32, allowed_query = SET(), duplicate_fields = 'reject',
+      request_storage = 'protected_transient', capture = 'redacted_metadata', response_cache = 'no-store',
+      response_status = RESULT.status, response_headers = RESULT.headers, response_body = RESULT.body,
+      error_encoder = errors.error_response);
+  EXPORT SOURCE transport.users_replace AS users_replace;
+  CREATE SOURCE transport.users_patch FROM HTTP REQUEST AS request
+    INTO COMMAND $api.patch_resource('Users', HTTP_PATH_TEXT(request, 'id'), HTTP_HEADER_OPTION_UNIQUE(request, 'if-match'), HTTP_JSON_BODY(request))
+    WITH (method = 'PATCH', path = $prefix || '/Users/{id}', authentication = 'application',
+      accepted_content_types = SET('application/scim+json', 'application/json'), max_body_bytes = 65536,
+      max_path_bytes = 2048, max_headers = 32, allowed_query = SET(), duplicate_fields = 'reject',
+      request_storage = 'protected_transient', capture = 'redacted_metadata', response_cache = 'no-store',
+      response_status = RESULT.status, response_headers = RESULT.headers, response_body = RESULT.body,
+      error_encoder = errors.error_response);
+  EXPORT SOURCE transport.users_patch AS users_patch;
+  CREATE SOURCE transport.users_delete FROM HTTP REQUEST AS request
+    INTO COMMAND $api.delete_resource('Users', HTTP_PATH_TEXT(request, 'id'), HTTP_HEADER_OPTION_UNIQUE(request, 'if-match'))
+    WITH (method = 'DELETE', path = $prefix || '/Users/{id}', authentication = 'application',
+      accepted_content_types = SET('application/scim+json', 'application/json'), max_body_bytes = 65536,
+      max_path_bytes = 2048, max_headers = 32, allowed_query = SET(), duplicate_fields = 'reject',
+      request_storage = 'protected_transient', capture = 'redacted_metadata', response_cache = 'no-store',
+      response_status = RESULT.status, response_headers = RESULT.headers, response_body = RESULT.body,
+      error_encoder = errors.error_response);
+  EXPORT SOURCE transport.users_delete AS users_delete;
+  CREATE SOURCE transport.groups_list FROM HTTP REQUEST AS request
+    INTO COMMAND $api.list_resources('Groups', HTTP_QUERY_OPTION_UNIQUE(request, 'filter'), INTEGER_PARSE(COALESCE(HTTP_QUERY_OPTION_UNIQUE(request, 'startIndex'), '1')), INTEGER_PARSE(COALESCE(HTTP_QUERY_OPTION_UNIQUE(request, 'count'), '100')))
+    WITH (method = 'GET', path = $prefix || '/Groups', authentication = 'application',
+      accepted_content_types = SET('application/scim+json', 'application/json'), max_body_bytes = 65536,
+      max_path_bytes = 2048, max_headers = 32, allowed_query = SET('filter', 'startIndex', 'count'), duplicate_fields = 'reject',
+      request_storage = 'protected_transient', capture = 'redacted_metadata', response_cache = 'no-store',
+      response_status = RESULT.status, response_headers = RESULT.headers, response_body = RESULT.body,
+      error_encoder = errors.error_response);
+  EXPORT SOURCE transport.groups_list AS groups_list;
+  CREATE SOURCE transport.groups_get FROM HTTP REQUEST AS request
+    INTO COMMAND $api.get_resource('Groups', HTTP_PATH_TEXT(request, 'id'), HTTP_HEADER_OPTION_UNIQUE(request, 'if-match'), HTTP_HEADER_OPTION_UNIQUE(request, 'if-none-match'))
+    WITH (method = 'GET', path = $prefix || '/Groups/{id}', authentication = 'application',
+      accepted_content_types = SET('application/scim+json', 'application/json'), max_body_bytes = 65536,
+      max_path_bytes = 2048, max_headers = 32, allowed_query = SET(), duplicate_fields = 'reject',
+      request_storage = 'protected_transient', capture = 'redacted_metadata', response_cache = 'no-store',
+      response_status = RESULT.status, response_headers = RESULT.headers, response_body = RESULT.body,
+      error_encoder = errors.error_response);
+  EXPORT SOURCE transport.groups_get AS groups_get;
+  CREATE SOURCE transport.groups_create FROM HTTP REQUEST AS request
+    INTO COMMAND $api.create_resource('Groups', HTTP_JSON_BODY(request))
+    WITH (method = 'POST', path = $prefix || '/Groups', authentication = 'application',
+      accepted_content_types = SET('application/scim+json', 'application/json'), max_body_bytes = 65536,
+      max_path_bytes = 2048, max_headers = 32, allowed_query = SET(), duplicate_fields = 'reject',
+      request_storage = 'protected_transient', capture = 'redacted_metadata', response_cache = 'no-store',
+      response_status = RESULT.status, response_headers = RESULT.headers, response_body = RESULT.body,
+      error_encoder = errors.error_response);
+  EXPORT SOURCE transport.groups_create AS groups_create;
+  CREATE SOURCE transport.groups_replace FROM HTTP REQUEST AS request
+    INTO COMMAND $api.replace_resource('Groups', HTTP_PATH_TEXT(request, 'id'), HTTP_HEADER_OPTION_UNIQUE(request, 'if-match'), HTTP_JSON_BODY(request))
+    WITH (method = 'PUT', path = $prefix || '/Groups/{id}', authentication = 'application',
+      accepted_content_types = SET('application/scim+json', 'application/json'), max_body_bytes = 65536,
+      max_path_bytes = 2048, max_headers = 32, allowed_query = SET(), duplicate_fields = 'reject',
+      request_storage = 'protected_transient', capture = 'redacted_metadata', response_cache = 'no-store',
+      response_status = RESULT.status, response_headers = RESULT.headers, response_body = RESULT.body,
+      error_encoder = errors.error_response);
+  EXPORT SOURCE transport.groups_replace AS groups_replace;
+  CREATE SOURCE transport.groups_patch FROM HTTP REQUEST AS request
+    INTO COMMAND $api.patch_resource('Groups', HTTP_PATH_TEXT(request, 'id'), HTTP_HEADER_OPTION_UNIQUE(request, 'if-match'), HTTP_JSON_BODY(request))
+    WITH (method = 'PATCH', path = $prefix || '/Groups/{id}', authentication = 'application',
+      accepted_content_types = SET('application/scim+json', 'application/json'), max_body_bytes = 65536,
+      max_path_bytes = 2048, max_headers = 32, allowed_query = SET(), duplicate_fields = 'reject',
+      request_storage = 'protected_transient', capture = 'redacted_metadata', response_cache = 'no-store',
+      response_status = RESULT.status, response_headers = RESULT.headers, response_body = RESULT.body,
+      error_encoder = errors.error_response);
+  EXPORT SOURCE transport.groups_patch AS groups_patch;
+  CREATE SOURCE transport.groups_delete FROM HTTP REQUEST AS request
+    INTO COMMAND $api.delete_resource('Groups', HTTP_PATH_TEXT(request, 'id'), HTTP_HEADER_OPTION_UNIQUE(request, 'if-match'))
+    WITH (method = 'DELETE', path = $prefix || '/Groups/{id}', authentication = 'application',
+      accepted_content_types = SET('application/scim+json', 'application/json'), max_body_bytes = 65536,
+      max_path_bytes = 2048, max_headers = 32, allowed_query = SET(), duplicate_fields = 'reject',
+      request_storage = 'protected_transient', capture = 'redacted_metadata', response_cache = 'no-store',
+      response_status = RESULT.status, response_headers = RESULT.headers, response_body = RESULT.body,
+      error_encoder = errors.error_response);
+  EXPORT SOURCE transport.groups_delete AS groups_delete;
+  CREATE SOURCE transport.discovery_0 FROM HTTP REQUEST AS request
+    INTO COMMAND $api.discover(HTTP_PATH_WITHOUT_PREFIX(request, $prefix))
+    WITH (method = 'GET', path = $prefix || '/ServiceProviderConfig', authentication = 'application',
+      max_body_bytes = 0, max_path_bytes = 2048, max_headers = 32, allowed_query = SET(), duplicate_fields = 'reject',
+      response_cache = 'no-store', capture = 'redacted_metadata',
+      response_status = RESULT.status, response_headers = RESULT.headers, response_body = RESULT.body,
+      error_encoder = errors.error_response);
+  EXPORT SOURCE transport.discovery_0 AS discovery_0;
+  CREATE SOURCE transport.discovery_1 FROM HTTP REQUEST AS request
+    INTO COMMAND $api.discover(HTTP_PATH_WITHOUT_PREFIX(request, $prefix))
+    WITH (method = 'GET', path = $prefix || '/Schemas', authentication = 'application',
+      max_body_bytes = 0, max_path_bytes = 2048, max_headers = 32, allowed_query = SET(), duplicate_fields = 'reject',
+      response_cache = 'no-store', capture = 'redacted_metadata',
+      response_status = RESULT.status, response_headers = RESULT.headers, response_body = RESULT.body,
+      error_encoder = errors.error_response);
+  EXPORT SOURCE transport.discovery_1 AS discovery_1;
+  CREATE SOURCE transport.discovery_2 FROM HTTP REQUEST AS request
+    INTO COMMAND $api.discover(HTTP_PATH_WITHOUT_PREFIX(request, $prefix))
+    WITH (method = 'GET', path = $prefix || '/Schemas/{id}', authentication = 'application',
+      max_body_bytes = 0, max_path_bytes = 2048, max_headers = 32, allowed_query = SET(), duplicate_fields = 'reject',
+      response_cache = 'no-store', capture = 'redacted_metadata',
+      response_status = RESULT.status, response_headers = RESULT.headers, response_body = RESULT.body,
+      error_encoder = errors.error_response);
+  EXPORT SOURCE transport.discovery_2 AS discovery_2;
+  CREATE SOURCE transport.discovery_3 FROM HTTP REQUEST AS request
+    INTO COMMAND $api.discover(HTTP_PATH_WITHOUT_PREFIX(request, $prefix))
+    WITH (method = 'GET', path = $prefix || '/ResourceTypes', authentication = 'application',
+      max_body_bytes = 0, max_path_bytes = 2048, max_headers = 32, allowed_query = SET(), duplicate_fields = 'reject',
+      response_cache = 'no-store', capture = 'redacted_metadata',
+      response_status = RESULT.status, response_headers = RESULT.headers, response_body = RESULT.body,
+      error_encoder = errors.error_response);
+  EXPORT SOURCE transport.discovery_3 AS discovery_3;
+  CREATE SOURCE transport.discovery_4 FROM HTTP REQUEST AS request
+    INTO COMMAND $api.discover(HTTP_PATH_WITHOUT_PREFIX(request, $prefix))
+    WITH (method = 'GET', path = $prefix || '/ResourceTypes/{id}', authentication = 'application',
+      max_body_bytes = 0, max_path_bytes = 2048, max_headers = 32, allowed_query = SET(), duplicate_fields = 'reject',
+      response_cache = 'no-store', capture = 'redacted_metadata',
+      response_status = RESULT.status, response_headers = RESULT.headers, response_body = RESULT.body,
+      error_encoder = errors.error_response);
+  EXPORT SOURCE transport.discovery_4 AS discovery_4;
+END;

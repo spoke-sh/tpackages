@@ -1,0 +1,18 @@
+IMPORT types FROM './types.transit';
+CREATE PUBLIC FUNCTION error_response(code TEXT) RETURNS types.Response AS BEGIN
+  LET statuses = MAP('notFound' => 404, 'forbidden' => 403, 'methodNotAllowed' => 405,
+    'uniqueness' => 409, 'preconditionFailed' => 412, 'invalidSyntax' => 400,
+    'invalidFilter' => 400, 'invalidValue' => 400, 'invalidPath' => 400,
+    'noTarget' => 400, 'mutability' => 400, 'tooMany' => 400);
+  LET input_error = CONTAINS(SET('MissingField', 'WrongType', 'MissingValue', 'InvalidInteger',
+    'InvalidJSON', 'DuplicateJSONKey', 'RequiredValueMissing', 'InvalidPercentEncoding',
+    'DuplicateHTTPField', 'UnsupportedQueryParameter'), $code);
+  LET status = CASE WHEN input_error THEN 400 ELSE COALESCE(MAP_OPTION(statuses, $code), 500) END;
+  LET body = JSON_OBJECT('schemas', JSON_ARRAY_OF('urn:ietf:params:scim:api:messages:2.0:Error'),
+    'status', CAST(status AS TEXT));
+  LET body = CASE WHEN CONTAINS(SET('invalidFilter', 'invalidValue', 'invalidPath',
+    'noTarget', 'mutability', 'uniqueness', 'tooMany', 'invalidSyntax'), $code)
+    THEN JSON_SET(body, 'scimType', JSON_FROM_TEXT($code))
+    WHEN input_error THEN JSON_SET(body, 'scimType', JSON_FROM_TEXT('invalidSyntax')) ELSE body END;
+  RETURN ROW(status => status, body => SOME(body), headers => MAP('Content-Type' => 'application/scim+json', 'Cache-Control' => 'no-store'));
+END;

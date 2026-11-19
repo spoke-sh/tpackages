@@ -1,0 +1,18 @@
+IMPORT filter FROM '../src/filter.transit';
+
+TEST 'filter precedence and string comparison are deterministic' AS BEGIN
+  LET expression = filter.parse_filter('userName eq "ALICE" and active eq true or displayName sw "B"');
+  ASSERT filter.matches(expression, JSON '{"userName":"alice","active":true}');
+  ASSERT NOT filter.matches(expression, JSON '{"userName":"alice","active":false}');
+  ASSERT filter.matches(expression, JSON '{"userName":"other","displayName":"Bob"}');
+  ASSERT filter.matches(filter.parse_filter('not (active pr)'), JSON '{"userName":"alice"}');
+  ASSERT NOT filter.matches(filter.parse_filter('displayName sw "A"'), JSON '{"userName":"alice"}');
+END;
+
+TEST 'invalid and excessive filter syntax refuses before querying resources' AS BEGIN
+  ASSERT filter.parse_filter('userName eq "alice" trailing') FAILS WITH 'invalidFilter';
+  ASSERT filter.parse_filter('password eq "secret"') FAILS WITH 'invalidFilter';
+  ASSERT filter.parse_filter('emails[value eq "a@example.test"]') FAILS WITH 'invalidFilter';
+  ASSERT filter.parse_filter('active co "true"') FAILS WITH 'invalidFilter';
+  ASSERT filter.parse_filter(REPEAT('(', 20) || 'active pr' || REPEAT(')', 20)) FAILS WITH 'invalidFilter';
+END;

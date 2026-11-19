@@ -1,0 +1,44 @@
+TEST 'refresh serializes one generation and rotates protected credentials'
+  USING MODULES (app) AS BEGIN
+  ACTIVATE TEST MODULE app;
+  SET TEST SECRET 'example.oauth.client_secret' TO 'client-secret';
+  LET browser = TEST SECRET 'browser-binding-32-bytes-minimum!!';
+  LET start = INVOKE COMMAND app.api.begin_authorization(browser, NONE);
+  LET query = URL_QUERY_UNIQUE(start.location);
+  MOCK SINK app.api.token RETURNS IN ORDER (
+    STATUS 200 BODY TEST SECRET JSON '{"access_token":"first","token_type":"bearer","refresh_token":"refresh-1","expires_in":3600}',
+    STATUS 200 BODY TEST SECRET JSON '{"access_token":"second","token_type":"bearer","refresh_token":"refresh-2","expires_in":3600}'
+  );
+  LET operation = INVOKE COMMAND app.api.accept_callback(query['state'], browser, query['redirect_uri'], NONE, SOME(TEST SECRET 'code'), NONE);
+  DRAIN MODULE app.api WITHIN 100 STEPS;
+  LET credential = MATCH app.api.outcome(operation) WHEN Granted(value) THEN value ELSE FAIL 'ExpectedGrant' END;
+  LET refresh = INVOKE COMMAND app.api.refresh(credential, 1);
+  ASSERT INVOKE COMMAND app.api.refresh(credential, 1) FAILS WITH 'StaleCredential';
+  DRAIN MODULE app.api WITHIN 100 STEPS;
+  ASSERT app.api.outcome(refresh) = Granted(credential);
+  ASSERT app.api.credential(credential).generation = 2;
+  ASSERT INVOKE COMMAND app.api.refresh(credential, 1) FAILS WITH 'StaleCredential';
+  ASSERT SINK app.api.token DISPATCH COUNT = 2;
+  ASSERT NO SECRET IN LOGS;
+END;
+
+TEST 'revocation disables local access before the remote outcome'
+  USING MODULES (app) AS BEGIN
+  ACTIVATE TEST MODULE app;
+  SET TEST SECRET 'example.oauth.client_secret' TO 'client-secret';
+  LET browser = TEST SECRET 'browser-binding-32-bytes-minimum!!';
+  LET start = INVOKE COMMAND app.api.begin_authorization(browser, NONE);
+  LET query = URL_QUERY_UNIQUE(start.location);
+  MOCK SINK app.api.token RETURNS STATUS 200 BODY TEST SECRET JSON
+    '{"access_token":"first","token_type":"bearer","expires_in":3600}';
+  LET operation = INVOKE COMMAND app.api.accept_callback(query['state'], browser, query['redirect_uri'], NONE, SOME(TEST SECRET 'code'), NONE);
+  DRAIN MODULE app.api WITHIN 100 STEPS;
+  LET credential = MATCH app.api.outcome(operation) WHEN Granted(value) THEN value ELSE FAIL 'ExpectedGrant' END;
+  MOCK SINK app.api.revocation RETURNS OUTCOME 'unknown';
+  LET revoke = INVOKE COMMAND app.api.revoke(credential, 1);
+  ASSERT app.api.credential(credential) FAILS WITH 'CredentialUnavailable';
+  DRAIN MODULE app.api WITHIN 100 STEPS;
+  ASSERT app.api.outcome(revoke) = Unknown(revoke);
+  ASSERT app.api.credential(credential) FAILS WITH 'CredentialUnavailable';
+  ASSERT SINK app.api.revocation DISPATCH COUNT = 1;
+END;

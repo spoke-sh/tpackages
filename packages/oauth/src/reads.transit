@@ -1,0 +1,30 @@
+CREATE VIEW oauth.status AS
+  SELECT id, authorization, outcome FROM oauth.operations WHERE owner = CURRENT_OWNER();
+CREATE VIEW oauth.credential_metadata AS
+  SELECT id, scopes, expires_at, generation, status FROM oauth.credentials WHERE owner = CURRENT_OWNER();
+
+CREATE FUNCTION oauth.outcome(operation types.OperationId) RETURNS types.Outcome READS (oauth.status) AS BEGIN
+  LET found = SELECT ONE outcome FROM oauth.status WHERE id = $operation;
+  RETURN found.outcome;
+END;
+CREATE FUNCTION oauth.credential(id types.CredentialId)
+  RETURNS ROW(scopes SET<TEXT>, expires_at TIMESTAMP, generation BIGINT)
+  READS (oauth.credentials, oauth.policy) AS BEGIN
+  REQUIRE EXISTS (SELECT id FROM oauth.policy WHERE id = 'client' AND enabled) ELSE 'CredentialUnavailable';
+  RETURN SELECT ONE scopes, expires_at, generation FROM oauth.credentials
+    WHERE id = $id AND owner = CURRENT_OWNER() AND status = 'active' AND expires_at > NOW()
+    ELSE FAIL 'CredentialUnavailable';
+END;
+-- Invocation rights for this protected-use function are distinct from metadata reads.
+CREATE FUNCTION oauth.token_material(id types.CredentialId)
+  RETURNS ROW(access SECRET<TEXT>, id_token OPTION<SECRET<TEXT>>)
+  READS (oauth.credentials, oauth.policy, PROTECTED_STORE) AS BEGIN
+  LET available = oauth.credential($id);
+  LET row = SELECT ONE token, id_token FROM oauth.credentials WHERE id = $id AND owner = CURRENT_OWNER();
+  RETURN ROW(access => UNPROTECT(row.token, 'oauth.access'),
+    id_token => OPTION_MAP(row.id_token, handle => UNPROTECT(handle, 'oauth.id_token')));
+END;
+
+CREATE VIEW oauth.policy_status AS
+  SELECT enabled, _revision AS revision FROM oauth.policy WHERE id = 'client'
+    AND NATIVE_ALLOWED(CURRENT_OWNER(), 'configure', oauth.policy);

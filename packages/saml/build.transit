@@ -1,0 +1,8 @@
+EXPORT MODULE ServiceProvider FROM './src/service-provider.transit';
+EXPORT FUNCTION read_metadata FROM './src/metadata.transit';
+EXPORT TYPE Configuration FROM './src/types.transit';
+EXPORT TARGET default FROM './examples/build.transit';
+EXPORT TEST TARGET tests FROM './tests/build.transit';
+EXPORT MODULE Http FROM './src/http.transit';
+EXPORT TYPE Identity FROM './src/types.transit';
+EXPORT TARGET http FROM './examples/build.transit';

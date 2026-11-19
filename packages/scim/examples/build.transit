@@ -1,0 +1,41 @@
+IMPORT library FROM '../build.transit';
+
+-- Replace this example policy with the application's provisioning authority.
+CREATE MODULE ExamplePolicy() AS BEGIN
+  CREATE PUBLIC FUNCTION can_read(owner OWNER, kind TEXT, id TEXT) RETURNS BOOLEAN AS BEGIN
+    RETURN $owner = OWNER('example-provisioner');
+  END;
+  CREATE PUBLIC GUARD allow(owner OWNER, kind TEXT, action TEXT, id OPTION<TEXT>) AS BEGIN
+    REQUIRE $owner = OWNER('example-provisioner') ELSE 'forbidden';
+  END;
+END;
+
+EXPORT MODULE Application() AS BEGIN
+  LET store = USE library.DocumentStore(SCHEMA_BINDING('example_scim_store'));
+  LET policy = USE ExamplePolicy();
+  LET api = USE library.ServiceProvider(SCHEMA_BINDING('example_scim'), store, policy, 'https://app.example.test/scim/v2');
+  LET http = USE library.Http(SCHEMA_BINDING('example_scim_http'), api, '/scim/v2');
+  BIND SCHEMA consumer TO SCHEMA_BINDING('example_scim_consumer');
+  CREATE PRIVATE TABLE consumer.results (id TEXT PRIMARY KEY, owner OWNER, observed_at TIMESTAMP);
+  CREATE DATAFLOW consumer.observe FROM STREAM api.changes AS event
+    WITH (consumer = 'example.results', required = TRUE, checkpoint = 'terminal_atomic') AS BEGIN ATOMIC
+    INSERT INTO consumer.results VALUES (CAST(event.event_id AS TEXT), event.owner, event.observed_at)
+      ON CONFLICT (id) DO ASSERT SAME ROW;
+  END;
+  CREATE VIEW consumer.observed AS SELECT * FROM consumer.results WHERE owner = CURRENT_OWNER();
+  EXPORT VIEW consumer.observed AS observed;
+  AUTHORIZE MODULE api WITH (
+    commands = ROLE SETTING('example.command_role'), state = ROLE SETTING('example.state_role'),
+    effects = ROLE SETTING('example.effect_role'), reads = ROLE SETTING('example.read_role'),
+    maintenance = ROLE SETTING('example.maintenance_role')
+  );
+  AUTHORIZE DATAFLOW consumer.observe AS ROLE SETTING('example.consumer_role');
+  ACTIVATE MODULE api;
+  ACTIVATE DATAFLOW consumer.observe;
+  EXPORT MODULE api AS api;
+  AUTHORIZE MODULE http WITH (sources = ROLE SETTING('example.http_role'));
+  ACTIVATE MODULE http;
+  EXPORT MODULE http AS http;
+END;
+LET application = USE Application();
+EXPORT TARGET default AS SQL OF application;

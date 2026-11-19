@@ -1,0 +1,920 @@
+{
+  "pins": {
+    "transit-upstream": "c1f2680d9353175e58ad503e750e7b4da76a84c5",
+    "transitc-upstream": "61536eaa510e2ba8826c08b4f41072ed66f41ed5"
+  },
+  "cases": [
+    {
+      "id": "workspace-build",
+      "entry": "build.transit",
+      "action": "build",
+      "requirement": "TP-01",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.unsupported",
+        "category": "unsupported",
+        "stage": "compile",
+        "native_cause": "UnsupportedBuildStatement",
+        "source": "root/build.transit",
+        "line": "2",
+        "byte_column": "1"
+      }
+    },
+    {
+      "id": "workspace-test",
+      "entry": "build.transit",
+      "action": "test",
+      "requirement": "TP-01",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.unsupported",
+        "category": "unsupported",
+        "stage": "compile",
+        "native_cause": "UnsupportedBuildStatement",
+        "source": "root/build.transit",
+        "line": "2",
+        "byte_column": "1"
+      }
+    },
+    {
+      "id": "packages-oauth-build",
+      "entry": "packages/oauth/build.transit",
+      "action": "build",
+      "requirement": "TP-02",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "2",
+        "byte_column": "22"
+      }
+    },
+    {
+      "id": "packages-oauth-test",
+      "entry": "packages/oauth/build.transit",
+      "action": "test",
+      "requirement": "TP-02",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "2",
+        "byte_column": "22"
+      }
+    },
+    {
+      "id": "packages-oauth-facebook-build",
+      "entry": "packages/oauth-facebook/build.transit",
+      "action": "build",
+      "requirement": "TP-01",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "23"
+      }
+    },
+    {
+      "id": "packages-oauth-facebook-test",
+      "entry": "packages/oauth-facebook/build.transit",
+      "action": "test",
+      "requirement": "TP-01",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "23"
+      }
+    },
+    {
+      "id": "packages-oauth-github-build",
+      "entry": "packages/oauth-github/build.transit",
+      "action": "build",
+      "requirement": "TP-01",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "23"
+      }
+    },
+    {
+      "id": "packages-oauth-github-test",
+      "entry": "packages/oauth-github/build.transit",
+      "action": "test",
+      "requirement": "TP-01",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "23"
+      }
+    },
+    {
+      "id": "packages-oauth-google-build",
+      "entry": "packages/oauth-google/build.transit",
+      "action": "build",
+      "requirement": "TP-01",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "23"
+      }
+    },
+    {
+      "id": "packages-oauth-google-test",
+      "entry": "packages/oauth-google/build.transit",
+      "action": "test",
+      "requirement": "TP-01",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "23"
+      }
+    },
+    {
+      "id": "packages-oidc-build",
+      "entry": "packages/oidc/build.transit",
+      "action": "build",
+      "requirement": "TP-01",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "23"
+      }
+    },
+    {
+      "id": "packages-oidc-test",
+      "entry": "packages/oidc/build.transit",
+      "action": "test",
+      "requirement": "TP-01",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "23"
+      }
+    },
+    {
+      "id": "packages-saml-build",
+      "entry": "packages/saml/build.transit",
+      "action": "build",
+      "requirement": "TP-02",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "31"
+      }
+    },
+    {
+      "id": "packages-saml-test",
+      "entry": "packages/saml/build.transit",
+      "action": "test",
+      "requirement": "TP-02",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "31"
+      }
+    },
+    {
+      "id": "packages-scim-build",
+      "entry": "packages/scim/build.transit",
+      "action": "build",
+      "requirement": "TP-02",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "31"
+      }
+    },
+    {
+      "id": "packages-scim-test",
+      "entry": "packages/scim/build.transit",
+      "action": "test",
+      "requirement": "TP-02",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "31"
+      }
+    },
+    {
+      "id": "packages-webauthn-build",
+      "entry": "packages/webauthn/build.transit",
+      "action": "build",
+      "requirement": "TP-02",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "28"
+      }
+    },
+    {
+      "id": "packages-webauthn-test",
+      "entry": "packages/webauthn/build.transit",
+      "action": "test",
+      "requirement": "TP-02",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "28"
+      }
+    },
+    {
+      "id": "tests-consumers-conflicting-bindings-build",
+      "entry": "tests/consumers/conflicting-bindings/build.transit",
+      "action": "build",
+      "requirement": "TP-01",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "24"
+      }
+    },
+    {
+      "id": "tests-consumers-conflicting-bindings-test",
+      "entry": "tests/consumers/conflicting-bindings/build.transit",
+      "action": "test",
+      "requirement": "TP-01",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "24"
+      }
+    },
+    {
+      "id": "tests-consumers-github-build",
+      "entry": "tests/consumers/github/build.transit",
+      "action": "build",
+      "requirement": "TP-01",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "27"
+      }
+    },
+    {
+      "id": "tests-consumers-github-test",
+      "entry": "tests/consumers/github/build.transit",
+      "action": "test",
+      "requirement": "TP-01",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "27"
+      }
+    },
+    {
+      "id": "tests-consumers-oidc-build",
+      "entry": "tests/consumers/oidc/build.transit",
+      "action": "build",
+      "requirement": "TP-01",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "27"
+      }
+    },
+    {
+      "id": "tests-consumers-oidc-test",
+      "entry": "tests/consumers/oidc/build.transit",
+      "action": "test",
+      "requirement": "TP-01",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "27"
+      }
+    },
+    {
+      "id": "tests-consumers-oidc-github-build",
+      "entry": "tests/consumers/oidc-github/build.transit",
+      "action": "build",
+      "requirement": "TP-01",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "27"
+      }
+    },
+    {
+      "id": "tests-consumers-oidc-github-test",
+      "entry": "tests/consumers/oidc-github/build.transit",
+      "action": "test",
+      "requirement": "TP-01",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "27"
+      }
+    },
+    {
+      "id": "tests-consumers-saml-scim-build",
+      "entry": "tests/consumers/saml-scim/build.transit",
+      "action": "build",
+      "requirement": "TP-01",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "27"
+      }
+    },
+    {
+      "id": "tests-consumers-saml-scim-test",
+      "entry": "tests/consumers/saml-scim/build.transit",
+      "action": "test",
+      "requirement": "TP-01",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "27"
+      }
+    },
+    {
+      "id": "tests-consumers-selection-build",
+      "entry": "tests/consumers/selection/build.transit",
+      "action": "build",
+      "requirement": "TP-01",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.unsupported",
+        "category": "unsupported",
+        "stage": "compile",
+        "native_cause": "UnsupportedBuildStatement",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "1"
+      }
+    },
+    {
+      "id": "tests-consumers-selection-test",
+      "entry": "tests/consumers/selection/build.transit",
+      "action": "test",
+      "requirement": "TP-01",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.unsupported",
+        "category": "unsupported",
+        "stage": "compile",
+        "native_cause": "UnsupportedBuildStatement",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "1"
+      }
+    },
+    {
+      "id": "tests-consumers-two-instances-build",
+      "entry": "tests/consumers/two-instances/build.transit",
+      "action": "build",
+      "requirement": "TP-01",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "27"
+      }
+    },
+    {
+      "id": "tests-consumers-two-instances-test",
+      "entry": "tests/consumers/two-instances/build.transit",
+      "action": "test",
+      "requirement": "TP-01",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "27"
+      }
+    },
+    {
+      "id": "tests-consumers-webauthn-build",
+      "entry": "tests/consumers/webauthn/build.transit",
+      "action": "build",
+      "requirement": "TP-01",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "27"
+      }
+    },
+    {
+      "id": "tests-consumers-webauthn-test",
+      "entry": "tests/consumers/webauthn/build.transit",
+      "action": "test",
+      "requirement": "TP-01",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "27"
+      }
+    },
+    {
+      "id": "probe-effects",
+      "entry": "tests/compiler/effects/build.transit",
+      "action": "build",
+      "requirement": "TP-06",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.unsupported",
+        "category": "unsupported",
+        "stage": "compile",
+        "native_cause": "RuntimePrivateOrUnsupportedDeclaration",
+        "source": "root/build.transit",
+        "line": "2",
+        "byte_column": "10"
+      }
+    },
+    {
+      "id": "probe-protected",
+      "entry": "tests/compiler/protected/build.transit",
+      "action": "build",
+      "requirement": "TP-04",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.unsupported",
+        "category": "unsupported",
+        "stage": "compile",
+        "native_cause": "RuntimePrivateOrUnsupportedDeclaration",
+        "source": "root/build.transit",
+        "line": "2",
+        "byte_column": "10"
+      }
+    },
+    {
+      "id": "probe-testing",
+      "entry": "tests/compiler/testing/build.transit",
+      "action": "test",
+      "requirement": "TP-08",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.unsupported",
+        "category": "unsupported",
+        "stage": "compile",
+        "native_cause": "UnsupportedBuildStatement",
+        "source": "root/build.transit",
+        "line": "6",
+        "byte_column": "5"
+      }
+    },
+    {
+      "id": "probe-types",
+      "entry": "tests/compiler/types/build.transit",
+      "action": "build",
+      "requirement": "TP-03",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.unsupported",
+        "category": "unsupported",
+        "stage": "compile",
+        "native_cause": "UnsupportedSourceDeclaration",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "15"
+      }
+    },
+    {
+      "id": "probe-workspace",
+      "entry": "tests/compiler/workspace/build.transit",
+      "action": "build",
+      "requirement": "TP-01",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "23"
+      }
+    },
+    {
+      "id": "external-snapshot",
+      "entry": "@external",
+      "action": "build",
+      "requirement": "TP-01",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "github/build.transit",
+        "line": "1",
+        "byte_column": "23"
+      }
+    },
+    {
+      "id": "probe-documents",
+      "entry": "tests/compiler/documents/build.transit",
+      "action": "build",
+      "requirement": "TP-10",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.unsupported",
+        "category": "unsupported",
+        "stage": "compile",
+        "native_cause": "RuntimePrivateOrUnsupportedDeclaration",
+        "source": "root/build.transit",
+        "line": "2",
+        "byte_column": "17"
+      }
+    },
+    {
+      "id": "probe-kv",
+      "entry": "tests/compiler/kv/build.transit",
+      "action": "build",
+      "requirement": "TP-11",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.unsupported",
+        "category": "unsupported",
+        "stage": "compile",
+        "native_cause": "RuntimePrivateOrUnsupportedDeclaration",
+        "source": "root/build.transit",
+        "line": "2",
+        "byte_column": "17"
+      }
+    },
+    {
+      "id": "probe-mixed-state",
+      "entry": "tests/compiler/mixed-state/build.transit",
+      "action": "build",
+      "requirement": "TP-12",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.unsupported",
+        "category": "unsupported",
+        "stage": "compile",
+        "native_cause": "RuntimePrivateOrUnsupportedDeclaration",
+        "source": "root/build.transit",
+        "line": "3",
+        "byte_column": "17"
+      }
+    },
+    {
+      "id": "probe-stream-composition",
+      "entry": "tests/compiler/stream-composition/build.transit",
+      "action": "build",
+      "requirement": "TP-13",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceTemplate",
+        "source": "root/build.transit",
+        "line": "4",
+        "byte_column": "39"
+      }
+    },
+    {
+      "id": "probe-queries",
+      "entry": "tests/compiler/queries/build.transit",
+      "action": "build",
+      "requirement": "TP-14",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.unsupported",
+        "category": "unsupported",
+        "stage": "compile",
+        "native_cause": "RuntimePrivateOrUnsupportedDeclaration",
+        "source": "root/build.transit",
+        "line": "3",
+        "byte_column": "17"
+      }
+    },
+    {
+      "id": "probe-maintenance",
+      "entry": "tests/compiler/maintenance/build.transit",
+      "action": "build",
+      "requirement": "TP-15",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceTemplate",
+        "source": "root/build.transit",
+        "line": "3",
+        "byte_column": "39"
+      }
+    },
+    {
+      "id": "probe-command-http",
+      "entry": "tests/compiler/command-http/build.transit",
+      "action": "build",
+      "requirement": "TP-16",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceTemplate",
+        "source": "root/build.transit",
+        "line": "2",
+        "byte_column": "38"
+      }
+    },
+    {
+      "id": "tests-consumers-google-build",
+      "entry": "tests/consumers/google/build.transit",
+      "action": "build",
+      "requirement": "TP-01",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "25"
+      }
+    },
+    {
+      "id": "tests-consumers-google-test",
+      "entry": "tests/consumers/google/build.transit",
+      "action": "test",
+      "requirement": "TP-01",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "25"
+      }
+    },
+    {
+      "id": "tests-consumers-facebook-build",
+      "entry": "tests/consumers/facebook/build.transit",
+      "action": "build",
+      "requirement": "TP-01",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "25"
+      }
+    },
+    {
+      "id": "tests-consumers-facebook-test",
+      "entry": "tests/consumers/facebook/build.transit",
+      "action": "test",
+      "requirement": "TP-01",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "25"
+      }
+    },
+    {
+      "id": "tests-consumers-saml-build",
+      "entry": "tests/consumers/saml/build.transit",
+      "action": "build",
+      "requirement": "TP-01",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "25"
+      }
+    },
+    {
+      "id": "tests-consumers-saml-test",
+      "entry": "tests/consumers/saml/build.transit",
+      "action": "test",
+      "requirement": "TP-01",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "25"
+      }
+    },
+    {
+      "id": "tests-consumers-scim-build",
+      "entry": "tests/consumers/scim/build.transit",
+      "action": "build",
+      "requirement": "TP-01",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "25"
+      }
+    },
+    {
+      "id": "tests-consumers-scim-test",
+      "entry": "tests/consumers/scim/build.transit",
+      "action": "test",
+      "requirement": "TP-01",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "25"
+      }
+    },
+    {
+      "id": "tests-consumers-surfaces-build",
+      "entry": "tests/consumers/surfaces/build.transit",
+      "action": "build",
+      "requirement": "TP-01",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "23"
+      }
+    },
+    {
+      "id": "tests-consumers-surfaces-test",
+      "entry": "tests/consumers/surfaces/build.transit",
+      "action": "test",
+      "requirement": "TP-01",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "23"
+      }
+    }
+  ]
+}

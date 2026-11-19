@@ -1,0 +1,19 @@
+CREATE GUARD saml.require_request(request types.RequestContext, browser SECRET<TEXT>) AS
+  REQUIRE $request.owner = CURRENT_OWNER() AND NOT $request.consumed AND $request.expires_at > NOW()
+    AND SECURE_EQUAL($request.browser_hash, COMMITMENT($browser)) ELSE 'InvalidRequest',
+  REQUIRE EXISTS (SELECT id FROM saml.trust WHERE id = 'idp' AND enabled AND _revision = $request.trust_revision)
+    ELSE 'TrustChanged';
+
+CREATE DATAFLOW saml.configure_trust FROM COMMAND (
+  keys LIST<PUBLIC_KEY_REF>, enabled BOOLEAN, expected_revision REVISION
+) AS request AS BEGIN ATOMIC
+  REQUIRE NATIVE_ALLOWED(CURRENT_OWNER(), 'configure', saml.trust) ELSE 'Forbidden';
+  REQUIRE LENGTH(request.keys) > 0 AND LENGTH(request.keys) <= 8 ELSE 'InvalidConfiguration';
+  REQUIRE CURRENT_REVISION(saml.trust, 'idp') = request.expected_revision ELSE 'StalePolicy';
+  REQUIRE ALL(request.keys, key => PUBLIC_KEY_CURRENT(key)) ELSE 'TrustChanged';
+  UPDATE saml.trust SET keys = request.keys, enabled = request.enabled WHERE id = 'idp';
+END;
+
+CREATE VIEW saml.policy_status AS
+  SELECT enabled, _revision AS revision FROM saml.trust WHERE id = 'idp'
+    AND NATIVE_ALLOWED(CURRENT_OWNER(), 'configure', saml.trust);

@@ -1,0 +1,13 @@
+CREATE PUBLIC TYPE Configuration AS ROW(
+  entity_id TEXT, idp_entity_id TEXT, sso_endpoint TEXT, acs_url TEXT,
+  signing_secret TEXT, trusted_signing_keys LIST<PUBLIC_KEY_REF>,
+  request_seconds BIGINT, clock_skew_seconds BIGINT, max_assertion_seconds BIGINT
+);
+CREATE PUBLIC TYPE Identity AS ROW(
+  issuer TEXT, subject TEXT, name_id_format TEXT, session_index OPTION<TEXT>,
+  expires_at TIMESTAMP, attributes MAP<TEXT, LIST<TEXT>>
+);
+
+CREATE PUBLIC TYPE RequestContext AS ROW(
+  id TEXT, owner OWNER, browser_hash BYTES, expires_at TIMESTAMP, consumed BOOLEAN, trust_revision REVISION
+);

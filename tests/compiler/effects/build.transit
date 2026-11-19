@@ -1,0 +1,3 @@
+CREATE TARGET default AS BEGIN
+  CREATE SINK endpoint INTO HTTP WITH (endpoint = 'https://example.invalid', method = 'POST', max_attempts = 1);
+END;

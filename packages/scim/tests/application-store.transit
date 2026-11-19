@@ -1,0 +1,102 @@
+IMPORT library FROM '../build.transit';
+
+-- Independent application-owned Table model exercises the public Store contract.
+-- It intentionally does not instantiate the package's DocumentStore.
+CREATE MODULE IdentityStore(binding SCHEMA_BINDING) AS BEGIN
+  BIND SCHEMA identity TO $binding;
+  CREATE PRIVATE TABLE identity.records (
+    id TEXT PRIMARY KEY, kind TEXT NOT NULL, document JSON NOT NULL,
+    username TEXT GENERATED ALWAYS AS (CASE WHEN kind = 'Users'
+      THEN UNICODE_CASEFOLD(JSON_STRING(document, 'userName')) ELSE NULL END),
+    CONSTRAINT username UNIQUE (username)
+  );
+  CREATE PRIVATE STREAM identity.changes (
+    event_id TEXT, owner OWNER, kind TEXT, id TEXT, version TEXT, action TEXT, observed_at TIMESTAMP
+  ) WITH (retention = 'unlimited', partition_by = 'id', disclosure = 'current_owner');
+  CREATE VIEW identity.resources AS
+    SELECT kind, id, JSON_STRING_AT(document, ['meta', 'version']) AS version, document FROM identity.records;
+
+  CREATE FUNCTION canonical_members(kind TEXT, document JSON) RETURNS JSON READS (identity.records) AS BEGIN
+    IF $kind <> 'Groups' THEN RETURN $document; END IF;
+    LET members = JSON_ARRAY_OR_DEFAULT($document, 'members', []);
+    REQUIRE NOT EXISTS (SELECT value FROM UNNEST(members) member WHERE NOT EXISTS (
+      SELECT id FROM identity.records WHERE kind = 'Users' AND id = JSON_STRING(member.value, 'value'))) ELSE 'invalidValue';
+    RETURN JSON_SET($document, 'members', JSON_FROM_LIST(ARRAY(
+      SELECT JSON_OBJECT('value', u.id, 'type', 'User', 'display', JSON_STRING(u.document, 'userName'))
+      FROM UNNEST(members) m JOIN identity.records u ON u.id = JSON_STRING(m.value, 'value') ORDER BY u.id)));
+  END;
+  CREATE PROCEDURE emit(id TEXT, action TEXT) AS BEGIN ATOMIC
+    LET row = SELECT ONE * FROM identity.resources WHERE id = $id;
+    PRODUCE INTO identity.changes VALUES (OPERATION_ID(CURRENT_REQUEST_ID(), $action || ':' || $id || ':' || row.version),
+      CURRENT_OWNER(), row.kind, $id, row.version, $action, NOW());
+  END;
+  CREATE PROCEDURE member_changed(id TEXT, name OPTION<TEXT>) AS BEGIN ATOMIC
+    LET groups = SELECT MANY id, document FROM identity.records r WHERE kind = 'Groups'
+      AND EXISTS (SELECT value FROM UNNEST(JSON_ARRAY_OR_DEFAULT(r.document, 'members', [])) m
+        WHERE JSON_STRING(m.value, 'value') = $id) ORDER BY id LIMIT 1001;
+    REQUIRE LENGTH(groups) <= 1000 ELSE 'tooMany';
+    FOR group IN groups DO
+      LET members = JSON_ARRAY_OR_DEFAULT(group.document, 'members', []);
+      LET changed = CASE WHEN IS_PRESENT($name) THEN MAP_LIST(members, member =>
+        CASE WHEN JSON_STRING(member, 'value') = $id
+          THEN JSON_SET(member, 'display', JSON_FROM_TEXT(REQUIRE_SOME($name))) ELSE member END)
+        ELSE FILTER(members, member => JSON_STRING(member, 'value') <> $id) END;
+      LET changed_document = JSON_SET_PATH(JSON_SET_PATH(JSON_SET(group.document, 'members', JSON_FROM_LIST(changed)),
+        ['meta', 'version'], JSON_FROM_TEXT('"' || NEW_ID() || '"')),
+        ['meta', 'lastModified'], JSON_FROM_TEXT(TIMESTAMP_FORMAT(NOW())));
+      UPDATE identity.records SET document = changed_document WHERE id = group.id;
+      CALL emit(group.id, 'membership_changed');
+    END FOR;
+  END;
+  CREATE PUBLIC PROCEDURE insert(kind TEXT, document JSON) AS BEGIN ATOMIC
+    REQUIRE (SELECT COUNT(*) FROM identity.records WHERE kind = $kind) < 1000 ELSE 'tooMany';
+    LET id = JSON_STRING($document, 'id');
+    INSERT INTO identity.records (id, kind, document) VALUES (id, $kind, canonical_members($kind, $document))
+      ON CONSTRAINT username FAIL 'uniqueness';
+    CALL emit(id, 'created');
+  END;
+  CREATE PUBLIC PROCEDURE replace(kind TEXT, id TEXT, expected_version TEXT, document JSON) AS BEGIN ATOMIC
+    LET current = SELECT ONE * FROM identity.resources WHERE kind = $kind AND id = $id;
+    REQUIRE current.version = $expected_version ELSE 'preconditionFailed';
+    IF $kind = 'Users' AND JSON_STRING(current.document, 'userName') <> JSON_STRING($document, 'userName') THEN
+      CALL member_changed($id, SOME(JSON_STRING($document, 'userName')));
+    END IF;
+    UPDATE identity.records SET document = canonical_members($kind, $document) WHERE id = $id
+      ON CONSTRAINT username FAIL 'uniqueness';
+    CALL emit($id, 'updated');
+  END;
+  CREATE PUBLIC PROCEDURE remove(kind TEXT, id TEXT, expected_version TEXT) AS BEGIN ATOMIC
+    LET current = SELECT ONE * FROM identity.resources WHERE kind = $kind AND id = $id;
+    REQUIRE current.version = $expected_version ELSE 'preconditionFailed';
+    IF $kind = 'Users' THEN CALL member_changed($id, NONE); END IF;
+    CALL emit($id, 'deleted');
+    DELETE FROM identity.records WHERE id = $id;
+  END;
+  EXPORT VIEW identity.resources AS resources;
+  EXPORT STREAM identity.changes AS changes;
+END;
+
+CREATE MODULE ProvisioningPolicy() AS BEGIN
+  CREATE PUBLIC GUARD allow(owner OWNER, kind TEXT, action TEXT, id OPTION<TEXT>) AS BEGIN
+    REQUIRE $owner = OWNER('example-provisioner') ELSE 'forbidden';
+  END;
+  CREATE PUBLIC FUNCTION can_read(owner OWNER, kind TEXT, id TEXT) RETURNS BOOLEAN AS BEGIN
+    RETURN $owner = OWNER('example-provisioner');
+  END;
+END;
+EXPORT MODULE Application() AS BEGIN
+  LET store = USE IdentityStore(SCHEMA_BINDING('application_identity'));
+  LET policy = USE ProvisioningPolicy();
+  LET api = USE library.ServiceProvider(SCHEMA_BINDING('application_scim'), store, policy, 'https://app.example.test/scim/v2');
+  LET http = USE library.Http(SCHEMA_BINDING('application_http'), api, '/scim/v2');
+  BIND SCHEMA observer TO SCHEMA_BINDING('application_observer');
+  CREATE PRIVATE TABLE observer.rows (id TEXT PRIMARY KEY, owner OWNER);
+  CREATE DATAFLOW observer.consume FROM STREAM api.changes AS event
+    WITH (consumer = 'example.results', required = TRUE, checkpoint = 'terminal_atomic') AS BEGIN ATOMIC
+    INSERT INTO observer.rows VALUES (event.event_id, event.owner) ON CONFLICT (id) DO ASSERT SAME ROW;
+  END;
+  CREATE VIEW observer.visible AS SELECT * FROM observer.rows WHERE owner = CURRENT_OWNER();
+  EXPORT VIEW observer.visible AS observed;
+  EXPORT MODULE api AS api;
+  EXPORT MODULE http AS http;
+END;

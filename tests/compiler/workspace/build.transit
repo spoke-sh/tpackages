@@ -1,0 +1,3 @@
+DEPENDENCY oauth FROM WORKSPACE 'oauth';
+IMPORT oauth FROM PACKAGE oauth FILE 'build.transit';
+EXPORT TARGET default = oauth.default;

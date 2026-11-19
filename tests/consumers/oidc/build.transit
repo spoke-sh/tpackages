@@ -1,0 +1,45 @@
+DEPENDENCY package_0 FROM WORKSPACE 'oidc';
+IMPORT package_0 FROM PACKAGE package_0 FILE 'build.transit';
+
+EXPORT MODULE Application() AS BEGIN
+  LET api = USE package_0.RelyingParty(SCHEMA_BINDING('consumer_oidc'), ROW(
+    oauth => ROW(client_id => 'example-client', client_secret => 'example.oauth.client_secret',
+      redirect_uri => 'https://app.example.test/callback/oidc', scopes => SET('openid', 'profile'),
+      challenge_seconds => 300, credential_seconds => 3600,
+      allowed_hosts => SET('accounts.google.com', 'oauth2.googleapis.com', 'www.googleapis.com'),
+      authorization_parameters => MAP()),
+    issuer => 'https://accounts.google.com', authorization_endpoint => 'https://accounts.google.com/o/oauth2/v2/auth',
+    token_endpoint => 'https://oauth2.googleapis.com/token', jwks_uri => 'https://www.googleapis.com/oauth2/v3/certs',
+    client_auth => 'client_secret_post', metadata_seconds => 600, clock_skew_seconds => 30,
+    max_token_age_seconds => 3600, max_auth_age_seconds => NONE
+  ));
+  BIND SCHEMA consumer TO SCHEMA_BINDING('consumer_oidc_consumer');
+  CREATE PRIVATE TABLE consumer.results (id TEXT PRIMARY KEY, owner OWNER, issuer TEXT, subject TEXT);
+  CREATE DATAFLOW consumer.observe FROM STREAM api.completions AS event
+    WITH (consumer = 'example.results', required = TRUE, checkpoint = 'terminal_atomic') AS BEGIN ATOMIC
+    IF event.outcome IS NOT Verified THEN RETURN; END IF;
+    LET identity = MATCH event.outcome WHEN Verified(value) THEN value ELSE FAIL 'ExpectedIdentity' END;
+    INSERT INTO consumer.results VALUES (CAST(event.event_id AS TEXT), event.owner, identity.issuer, identity.subject)
+      ON CONFLICT (id) DO ASSERT SAME ROW;
+  END;
+  CREATE VIEW consumer.observed AS SELECT * FROM consumer.results WHERE owner = CURRENT_OWNER();
+  EXPORT VIEW consumer.observed AS observed;
+  AUTHORIZE MODULE api WITH (
+    commands = ROLE SETTING('example.command_role'), state = ROLE SETTING('example.state_role'),
+    effects = ROLE SETTING('example.effect_role'), reads = ROLE SETTING('example.read_role'),
+    maintenance = ROLE SETTING('example.maintenance_role')
+  );
+  AUTHORIZE DATAFLOW consumer.observe AS ROLE SETTING('example.consumer_role');
+  ACTIVATE MODULE api;
+  ACTIVATE DATAFLOW consumer.observe;
+  EXPORT MODULE api AS api;
+END;
+LET application = USE Application();
+EXPORT TARGET default AS SQL OF application;
+CREATE PUBLIC TEST TARGET tests AS BEGIN
+  TEST 'selected package closure contains no unrelated packages' AS BEGIN
+    ASSERT NO RESOURCES OF KINDS (SOURCE, PUBLICATION) IN default;
+    ASSERT DEPENDENCIES default EQUAL SET('oauth', 'oidc');
+    ASSERT NO OUTPUT FROM PACKAGES EXCEPT SET('oauth', 'oidc');
+  END;
+END;

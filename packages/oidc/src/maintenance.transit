@@ -1,0 +1,10 @@
+CREATE DATAFLOW oidc.expire FROM TIMER EVERY SECONDS(60) AS tick AS BEGIN ATOMIC
+  LET expired = SELECT MANY id, owner FROM oidc.results
+    WHERE expires_at <= NOW() AND outcome IS types.Outcome.Pending ORDER BY expires_at, id LIMIT 64;
+  FOR item IN expired DO
+    -- Maintenance has explicit state authority, but the result preserves its owner.
+    UPDATE oidc.results SET outcome = types.Outcome.Refused('AuthorizationExpired') WHERE id = item.id;
+    DELETE FROM oidc.authorizations KEY item.id;
+    PRODUCE INTO oidc.completions VALUES (item.id, item.owner, types.Outcome.Refused('AuthorizationExpired'), NOW());
+  END FOR;
+END;

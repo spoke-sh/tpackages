@@ -1,0 +1,7 @@
+CREATE TARGET default AS BEGIN
+  CREATE PUBLIC DOCUMENT policy (id TEXT PRIMARY KEY, enabled BOOLEAN NOT NULL) WITH (profile = 'versioned');
+  CREATE PUBLIC DATAFLOW revise FROM COMMAND (expected REVISION, enabled BOOLEAN) AS request AS BEGIN ATOMIC
+    REQUIRE CURRENT_REVISION(policy, 'client') = request.expected ELSE 'StalePolicy';
+    UPDATE policy SET enabled = request.enabled WHERE id = 'client';
+  END;
+END;

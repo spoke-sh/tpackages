@@ -1,0 +1,23 @@
+CREATE PRIVATE DOCUMENT webauthn.policy (
+  id TEXT PRIMARY KEY, require_user_verification BOOLEAN NOT NULL,
+  reject_counter_regression BOOLEAN NOT NULL, enabled BOOLEAN NOT NULL
+) WITH (profile = 'versioned');
+INSERT INTO webauthn.policy VALUES ('rp', $config.require_user_verification, $config.reject_counter_regression, TRUE)
+  ON CONFLICT DO NOTHING;
+CREATE PRIVATE KV webauthn.challenges (ROW(
+  owner OWNER, browser_hash BYTES, challenge BYTES, ceremony TEXT,
+  user_handle OPTION<BYTES>, expires_at TIMESTAMP, consumed BOOLEAN, policy_revision REVISION
+));
+CREATE PRIVATE TABLE webauthn.expiry (id TEXT PRIMARY KEY, expires_at TIMESTAMP NOT NULL);
+CREATE INDEX webauthn.challenge_due ON webauthn.expiry (expires_at, id);
+CREATE PRIVATE TABLE webauthn.credentials (
+  id BYTES PRIMARY KEY, user_handle BYTES NOT NULL, public_key PUBLIC_KEY NOT NULL,
+  sign_count BIGINT NOT NULL CHECK (sign_count >= 0), backup_eligible BOOLEAN NOT NULL, backed_up BOOLEAN NOT NULL
+);
+CREATE PRIVATE STREAM webauthn.completions (
+  event_id TEXT, owner OWNER, ceremony TEXT, credential_id BYTES,
+  user_handle BYTES, counter_warning BOOLEAN, observed_at TIMESTAMP
+) WITH (retention = 'unlimited', partition_by = 'owner', disclosure = 'current_owner');
+CREATE VIEW webauthn.credential_metadata AS
+  SELECT id, user_handle, sign_count, backup_eligible, backed_up FROM webauthn.credentials
+  WHERE $policy.can_read_credential(CURRENT_OWNER(), user_handle);

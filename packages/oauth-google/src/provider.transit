@@ -1,0 +1,16 @@
+IMPORT oauth FROM PACKAGE oauth FILE 'build.transit';
+
+CREATE PUBLIC MODULE Provider() AS BEGIN
+  LET implementation = USE oauth.StaticProvider(ROW(
+    name => 'google', issuer => 'https://accounts.google.com',
+    authorization_endpoint => 'https://accounts.google.com/o/oauth2/v2/auth',
+    token_endpoint => 'https://oauth2.googleapis.com/token',
+    revocation_endpoint => SOME('https://oauth2.googleapis.com/revoke'), token_method => 'POST',
+    token_encoding => 'form', client_auth => 'client_secret_post',
+    scope_separator => ' ', response_scope_separator => ' ',
+    pkce_s256 => TRUE, refresh => TRUE, issuer_parameter => FALSE,
+    authorization_parameter_names => SET('access_type', 'prompt', 'include_granted_scopes', 'login_hint')
+  ));
+  EXPORT FUNCTION implementation.metadata AS metadata;
+  EXPORT FUNCTION implementation.normalize AS normalize;
+END;

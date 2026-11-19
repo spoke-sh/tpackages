@@ -1,0 +1,88 @@
+CREATE DATAFLOW oidc.begin_authentication FROM COMMAND (browser SECRET<TEXT>) AS request
+  WITH (idempotency = 'original_owner_request') AS BEGIN ATOMIC
+  LET metadata = MATCH (SELECT OPTIONAL * FROM oidc.metadata WHERE id = $config.issuer)
+    WHEN SOME(value) THEN value ELSE FAIL 'DiscoveryRequired' END;
+  REQUIRE metadata.expires_at > NOW() ELSE 'DiscoveryRequired';
+  LET nonce = RANDOM_TOKEN(32);
+  LET started = CALL core.issue_challenge(request.browser, SOME(nonce));
+  PUT INTO oidc.authorizations KEY started.id VALUE ROW(
+    owner => CURRENT_OWNER(), nonce => nonce, expires_at => started.expires_at) IF ABSENT;
+  INSERT INTO oidc.results VALUES (started.id, CURRENT_OWNER(), started.expires_at, types.Outcome.Pending());
+  RETURN started;
+END;
+
+CREATE PROCEDURE oidc.settle(id oauth.AuthorizationId, outcome types.Outcome) AS BEGIN ATOMIC
+  LET current = SELECT ONE * FROM oidc.results WHERE id = $id AND owner = CURRENT_OWNER();
+  REQUIRE current.outcome IS types.Outcome.Pending ELSE 'AuthorizationAlreadySettled';
+  UPDATE oidc.results SET outcome = $outcome WHERE id = $id;
+  DELETE FROM oidc.authorizations KEY $id;
+  PRODUCE INTO oidc.completions VALUES ($id, current.owner, $outcome, NOW());
+END;
+
+-- Input offset settlement is part of the final transaction, including failure.
+-- Filtered refresh/revocation events only advance this consumer's checkpoint.
+CREATE DATAFLOW oidc.verify_identity FROM STREAM core.completions AS event
+  WITH (consumer = 'oidc.validation', required = TRUE, checkpoint = 'terminal_atomic') AS BEGIN
+  IF NOT IS_PRESENT(event.authorization) THEN RETURN; END IF;
+  LET authorization_id = REQUIRE_SOME(event.authorization);
+  LET result = SELECT ONE * FROM oidc.results WHERE id = authorization_id AND owner = event.owner;
+  IF result.outcome IS NOT types.Outcome.Pending THEN RETURN; END IF;
+  REQUIRE event.owner = CURRENT_OWNER() ELSE 'Forbidden';
+  IF event.outcome IS NOT oauth.Outcome.Granted THEN
+    BEGIN ATOMIC
+      CALL oidc.settle(authorization_id, MATCH event.outcome
+        WHEN Refused(reason) THEN types.Outcome.Refused(reason)
+        WHEN Unknown(operation) THEN types.Outcome.Unknown(operation)
+        ELSE types.Outcome.Refused('AuthorizationRefused') END);
+    END;
+    RETURN;
+  END IF;
+  LET pending = REQUIRE_SOME(GET FROM oidc.authorizations KEY authorization_id).value;
+  REQUIRE pending.owner = CURRENT_OWNER() AND pending.expires_at > NOW() ELSE 'AuthorizationUnavailable';
+  LET credential_id = MATCH event.outcome WHEN Granted(value) THEN value ELSE FAIL 'AuthorizationRefused' END;
+  LET credential = core.token_material(credential_id);
+  LET generation = core.credential(credential_id).generation;
+  LET snapshot = SELECT ONE * FROM oidc.metadata WHERE id = $config.issuer;
+  REQUIRE snapshot.expires_at > NOW() ELSE 'DiscoveryRequired';
+  VAR checked = TRY_RESULT(validation.validate_id_token(REQUIRE_SOME(credential.id_token), credential.access,
+    snapshot.keys, $config.issuer, $config.oauth.client_id, pending.nonce,
+    UNIX_SECONDS(NOW()), $config.clock_skew_seconds, $config.max_token_age_seconds, $config.max_auth_age_seconds));
+  VAR revision = snapshot._revision;
+  IF checked = ERR('RefreshKeysRequired') THEN
+    -- One bounded refresh per original input, including after crash/replay.
+    LET response = EXECUTE SINK oidc.jwks EFFECT OPERATION_ID(event.event_id, 'refresh-keys')
+      GUARD pending.expires_at > NOW() ON REPLAY OBSERVE ONLY;
+    REQUIRE response.outcome <> 'unknown' ELSE 'KeysOutcomeUnknown';
+    REQUIRE response.outcome = 'known' AND response.status = 200 ELSE 'KeysUnavailable';
+    LET fetched_keys = JSON_PARSE(response.body, max_bytes => 65536, max_depth => 8, duplicate_keys => 'reject');
+    REQUIRE LENGTH(JSON_ARRAY(fetched_keys, 'keys', 64)) > 0 ELSE 'EmptyKeySet';
+    BEGIN ATOMIC
+      REQUIRE CURRENT_REVISION(oidc.metadata, $config.issuer) = snapshot._revision ELSE 'MetadataChanged';
+      UPDATE oidc.metadata SET keys = fetched_keys, source_operation = OPERATION_ID(event.event_id, 'refresh-keys'),
+        expires_at = NOW() + SECONDS($config.metadata_seconds) WHERE id = $config.issuer;
+    END;
+    LET refreshed = SELECT ONE * FROM oidc.metadata WHERE id = $config.issuer;
+    SET revision = refreshed._revision;
+    SET checked = TRY_RESULT(validation.validate_id_token(REQUIRE_SOME(credential.id_token), credential.access,
+      refreshed.keys, $config.issuer, $config.oauth.client_id, pending.nonce,
+      UNIX_SECONDS(NOW()), $config.clock_skew_seconds, $config.max_token_age_seconds, $config.max_auth_age_seconds));
+  END IF;
+  LET claims = MATCH checked WHEN OK(value) THEN value WHEN ERR(reason) THEN FAIL reason END;
+  BEGIN ATOMIC
+    REQUIRE CURRENT_REVISION(oidc.metadata, $config.issuer) = revision ELSE 'MetadataChanged';
+    REQUIRE pending.expires_at > NOW() AND claims.expires_at > UNIX_SECONDS(NOW()) - $config.clock_skew_seconds
+      ELSE 'AuthorizationUnavailable';
+    REQUIRE core.credential(credential_id).generation = generation ELSE 'StaleCredential';
+    CALL oidc.settle(authorization_id, types.Outcome.Verified(claims WITH (credential = credential_id)));
+  END;
+ON FAILURE failure
+  BEGIN ATOMIC
+    IF IS_PRESENT(event.authorization) THEN
+      LET authorization_id = REQUIRE_SOME(event.authorization);
+      IF oidc.outcome(authorization_id) IS types.Outcome.Pending THEN
+        CALL oidc.settle(authorization_id, CASE WHEN failure.effect_outcome = 'unknown' OR failure.code = 'KeysOutcomeUnknown'
+          THEN types.Outcome.Unknown(oauth.OperationId(OPERATION_ID(event.event_id, 'refresh-keys'))) ELSE types.Outcome.Refused(failure.public_code) END);
+      END IF;
+    END IF;
+  END;
+END;

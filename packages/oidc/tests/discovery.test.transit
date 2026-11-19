@@ -1,0 +1,97 @@
+IMPORT fixtures FROM './fixtures.transit';
+
+TEST 'discovery validates configured endpoints and expires its key cache'
+  USING MODULES (app) AS BEGIN
+  ACTIVATE TEST MODULE app;
+  SET TEST CLOCK '2026-01-01T00:00:00Z';
+  SET TEST KEY 'issuer' ALGORITHM 'RSA-2048';
+  SET TEST SECRET 'example.oauth.client_secret' TO 'client-secret';
+  ASSERT INVOKE COMMAND app.api.begin_authentication(TEST SECRET 'browser-binding-32-bytes-minimum!!') FAILS WITH 'DiscoveryRequired';
+  MOCK SINK app.api.configuration RETURNS STATUS 200 BODY JSON
+    '{"issuer":"https://accounts.google.com","authorization_endpoint":"https://accounts.google.com/o/oauth2/v2/auth","token_endpoint":"https://oauth2.googleapis.com/token","jwks_uri":"https://www.googleapis.com/oauth2/v3/certs","response_types_supported":["code"],"id_token_signing_alg_values_supported":["RS256"],"code_challenge_methods_supported":["S256"],"token_endpoint_auth_methods_supported":["client_secret_post"]}';
+  MOCK SINK app.api.jwks RETURNS STATUS 200 BODY fixtures.keys();
+  LET operation = INVOKE COMMAND app.api.discover();
+  DRAIN MODULE app.api WITHIN 100 STEPS;
+  ASSERT app.api.discovery_status(operation) = 'complete';
+  LET started = INVOKE COMMAND app.api.begin_authentication(TEST SECRET 'browser-binding-32-bytes-minimum!!');
+  LET query = URL_QUERY_UNIQUE(started.location);
+  LET token = fixtures.token(fixtures.claims(query['nonce']));
+  MOCK SINK app.api.token RETURNS STATUS 200 BODY TEST_PROTECTED_JSON_OBJECT(
+    'access_token', TEST SECRET 'access', 'token_type', 'bearer', 'expires_in', 3600, 'id_token', token);
+  INVOKE COMMAND app.api.accept_callback(query['state'], TEST SECRET 'browser-binding-32-bytes-minimum!!',
+    query['redirect_uri'], NONE, SOME(TEST SECRET 'code'), NONE);
+  DRAIN MODULE app.api WITHIN 100 STEPS;
+  LET identity = MATCH app.api.outcome(started.id) WHEN Verified(value) THEN value ELSE FAIL 'ExpectedIdentity' END;
+  ASSERT identity.subject = 'subject-1';
+  ASSERT (SELECT COUNT(*) FROM TEST STREAM app.api.completions WHERE event_id = started.id) = 1;
+  RESTART;
+  DRAIN MODULE app.api WITHIN 100 STEPS;
+  ASSERT (SELECT COUNT(*) FROM TEST STREAM app.api.completions WHERE event_id = started.id) = 1;
+  ADVANCE TEST CLOCK BY SECONDS(600);
+  ASSERT INVOKE COMMAND app.api.begin_authentication(TEST SECRET 'browser-binding-32-bytes-minimum!!') FAILS WITH 'DiscoveryRequired';
+END;
+
+TEST 'discovery cannot redirect key retrieval to an attacker'
+  USING MODULES (app) AS BEGIN
+  ACTIVATE TEST MODULE app;
+  SET TEST CLOCK '2026-01-01T00:00:00Z';
+  MOCK SINK app.api.configuration RETURNS STATUS 200 BODY JSON
+    '{"issuer":"https://accounts.google.com","authorization_endpoint":"https://accounts.google.com/o/oauth2/v2/auth","token_endpoint":"https://oauth2.googleapis.com/token","jwks_uri":"https://attacker.example/keys"}';
+  LET operation = INVOKE COMMAND app.api.discover();
+  DRAIN MODULE app.api WITHIN 100 STEPS;
+  ASSERT app.api.discovery_status(operation) = 'refused';
+  ASSERT SINK app.api.jwks DISPATCH COUNT = 0;
+END;
+
+TEST 'OAuth refusal settles OIDC and advances its native consumer without finish'
+  USING MODULES (app) AS BEGIN
+  ACTIVATE TEST MODULE app;
+  SET TEST CLOCK '2026-01-01T00:00:00Z';
+  SET TEST SECRET 'example.oauth.client_secret' TO 'client-secret';
+  SET TEST KEY 'issuer' ALGORITHM 'RSA-2048';
+  MOCK SINK app.api.configuration RETURNS STATUS 200 BODY fixtures.discovery();
+  MOCK SINK app.api.jwks RETURNS STATUS 200 BODY fixtures.keys();
+  INVOKE COMMAND app.api.discover();
+  DRAIN MODULE app WITHIN 100 STEPS;
+  LET browser = TEST SECRET 'browser-binding-32-bytes-minimum!!';
+  LET start = INVOKE COMMAND app.api.begin_authentication(browser);
+  LET query = URL_QUERY_UNIQUE(start.location);
+  INVOKE COMMAND app.api.accept_callback(query['state'], browser, query['redirect_uri'], NONE, NONE, SOME('access_denied'));
+  CRASH BEFORE CHECKPOINT CONSUMER 'oidc.validation';
+  DRAIN MODULE app WITHIN 100 STEPS;
+  RESTART;
+  DRAIN MODULE app WITHIN 100 STEPS;
+  ASSERT app.api.outcome(start.id) = Refused('ProviderDenied');
+  ASSERT (SELECT COUNT(*) FROM TEST STREAM app.api.completions WHERE event_id = start.id) = 1;
+  ASSERT (SELECT COUNT(*) FROM app.observed) = 0;
+  ASSERT SINK app.api.token DISPATCH COUNT = 0;
+END;
+
+TEST 'a missing signing key causes one bounded refresh through the original effect'
+  USING MODULES (app) AS BEGIN
+  ACTIVATE TEST MODULE app;
+  SET TEST CLOCK '2026-01-01T00:00:00Z';
+  SET TEST SECRET 'example.oauth.client_secret' TO 'client-secret';
+  SET TEST KEY 'issuer' ALGORITHM 'RSA-2048';
+  MOCK SINK app.api.configuration RETURNS STATUS 200 BODY fixtures.discovery();
+  LET missing = JSON_OBJECT('keys', JSON_ARRAY_OF(JSON_SET(JWK_ENCODE(TEST_PUBLIC_KEY('issuer')), 'kid', JSON '"other"')));
+  MOCK SINK app.api.jwks RETURNS IN ORDER (STATUS 200 BODY missing, STATUS 200 BODY fixtures.keys());
+  INVOKE COMMAND app.api.discover();
+  DRAIN MODULE app WITHIN 100 STEPS;
+  LET browser = TEST SECRET 'browser-binding-32-bytes-minimum!!';
+  LET start = INVOKE COMMAND app.api.begin_authentication(browser);
+  LET query = URL_QUERY_UNIQUE(start.location);
+  MOCK SINK app.api.token RETURNS STATUS 200 BODY TEST_PROTECTED_JSON_OBJECT(
+    'access_token', TEST SECRET 'access', 'token_type', 'bearer', 'expires_in', 3600,
+    'id_token', fixtures.token(fixtures.claims(query['nonce'])));
+  INVOKE COMMAND app.api.accept_callback(query['state'], browser, query['redirect_uri'], NONE, SOME(TEST SECRET 'code'), NONE);
+  CRASH AFTER OBSERVATION app.api.jwks AT 2;
+  DRAIN MODULE app WITHIN 100 STEPS;
+  RESTART;
+  DRAIN MODULE app WITHIN 100 STEPS;
+  ASSERT app.api.outcome(start.id) IS Verified;
+  ASSERT SINK app.api.jwks DISPATCH COUNT = 2;
+  ASSERT SINK app.api.token DISPATCH COUNT = 1;
+  ASSERT (SELECT COUNT(*) FROM app.observed) = 1;
+  ASSERT (SELECT COUNT(*) FROM TEST STREAM app.api.completions) = 1;
+END;

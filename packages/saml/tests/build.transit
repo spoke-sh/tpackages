@@ -1,0 +1,6 @@
+IMPORT example FROM '../examples/build.transit';
+LET application = USE example.Application();
+LET browser = USE example.HttpApplication();
+EXPORT TARGET core AS TESTS OF application USING SUITES ('./sso.test.transit');
+EXPORT TARGET http AS TESTS OF browser USING SUITES ('./http.test.transit');
+EXPORT TEST TARGET tests AS GROUP (core, http);

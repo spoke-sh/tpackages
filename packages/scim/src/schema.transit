@@ -1,0 +1,106 @@
+-- Attribute names are case-insensitive. Reject duplicates after normalization,
+-- including differently cased spellings, before applying any operation.
+CREATE PUBLIC FUNCTION normalize(value JSON) RETURNS JSON
+  WITH (max_depth = 12, max_work = 8192) AS BEGIN
+  IF JSON_KIND($value) = 'array' THEN
+    RETURN JSON_FROM_LIST(MAP_LIST(JSON_AS_ARRAY($value), item => normalize(item)));
+  END IF;
+  IF JSON_KIND($value) <> 'object' THEN RETURN $value; END IF;
+  LET spelling = MAP('externalid' => 'externalId', 'username' => 'userName',
+    'displayname' => 'displayName', 'givenname' => 'givenName', 'familyname' => 'familyName',
+    'resourcetype' => 'resourceType', 'lastmodified' => 'lastModified', 'operations' => 'Operations');
+  VAR output = JSON '{}';
+  FOR key IN JSON_KEYS($value) DO
+    LET canonical = COALESCE(MAP_OPTION(spelling, LOWER(key)), LOWER(key));
+    REQUIRE NOT JSON_HAS(output, canonical) ELSE 'invalidSyntax';
+    SET output = JSON_SET(output, canonical, normalize(JSON_GET($value, key)));
+  END FOR;
+  RETURN output;
+END;
+
+CREATE PUBLIC FUNCTION schema_id(kind TEXT) RETURNS TEXT AS BEGIN
+  REQUIRE CONTAINS(SET('Users', 'Groups'), $kind) ELSE 'notFound';
+  RETURN CASE WHEN $kind = 'Users' THEN 'urn:ietf:params:scim:schemas:core:2.0:User'
+    ELSE 'urn:ietf:params:scim:schemas:core:2.0:Group' END;
+END;
+
+CREATE PUBLIC FUNCTION canonical_path(path TEXT) RETURNS TEXT AS BEGIN
+  LET paths = MAP('id' => 'id', 'externalid' => 'externalId', 'username' => 'userName',
+    'displayname' => 'displayName', 'active' => 'active', 'name' => 'name',
+    'name.givenname' => 'name.givenName', 'name.familyname' => 'name.familyName',
+    'emails' => 'emails', 'emails.value' => 'emails.value', 'emails.type' => 'emails.type',
+    'members' => 'members', 'members.value' => 'members.value',
+    'meta.resourcetype' => 'meta.resourceType', 'meta.created' => 'meta.created',
+    'meta.lastmodified' => 'meta.lastModified', 'meta.version' => 'meta.version');
+  REQUIRE MAP_HAS(paths, LOWER($path)) ELSE 'invalidPath';
+  RETURN paths[LOWER($path)];
+END;
+
+CREATE PUBLIC FUNCTION validate(kind TEXT, input JSON) RETURNS JSON AS BEGIN
+  REQUIRE JSON_KIND($input) = 'object' ELSE 'invalidSyntax';
+  REQUIRE JSON_ARRAY($input, 'schemas', 4) = [schema_id($kind)] ELSE 'invalidValue';
+  LET allowed = CASE WHEN $kind = 'Users' THEN SET('schemas', 'id', 'meta', 'externalId',
+    'userName', 'displayName', 'active', 'name', 'emails') ELSE SET('schemas', 'id', 'meta',
+    'externalId', 'displayName', 'members') END;
+  REQUIRE IS_SUBSET(JSON_KEYS($input), allowed) ELSE 'invalidValue';
+  FOR name IN ['externalId', 'displayName'] DO
+    REQUIRE OPTION_ALL(JSON_OPTION_STRING($input, name), value => LENGTH(value) <= 1024) ELSE 'invalidValue';
+  END FOR;
+  IF $kind = 'Users' THEN
+    LET username = COALESCE(JSON_OPTION_STRING($input, 'userName'), '');
+    REQUIRE LENGTH(username) > 0 AND LENGTH(username) <= 256
+      ELSE 'invalidValue';
+    REQUIRE JSON_OPTION_BOOLEAN($input, 'active') IS OPTION<BOOLEAN> ELSE 'invalidValue';
+    IF JSON_HAS($input, 'name') THEN
+      LET name = JSON_GET($input, 'name');
+      REQUIRE IS_SUBSET(JSON_KEYS(name), SET('givenName', 'familyName')) ELSE 'invalidValue';
+      FOR field IN JSON_KEYS(name) DO REQUIRE LENGTH(JSON_STRING(name, field)) <= 256 ELSE 'invalidValue'; END FOR;
+    END IF;
+    VAR primary_count BIGINT = 0;
+    FOR email IN JSON_ARRAY_OR_DEFAULT($input, 'emails', []) DO
+      REQUIRE IS_SUBSET(JSON_KEYS(email), SET('value', 'type', 'primary'))
+        AND LENGTH(JSON_STRING(email, 'value')) > 0 AND LENGTH(JSON_STRING(email, 'value')) <= 320 ELSE 'invalidValue';
+      REQUIRE OPTION_ALL(JSON_OPTION_STRING(email, 'type'), value => CONTAINS(SET('work', 'home', 'other'), value)) ELSE 'invalidValue';
+      IF COALESCE(JSON_OPTION_BOOLEAN(email, 'primary'), FALSE) THEN SET primary_count = primary_count + 1; END IF;
+    END FOR;
+    REQUIRE primary_count <= 1 AND LENGTH(JSON_ARRAY_OR_DEFAULT($input, 'emails', [])) <= 32 ELSE 'invalidValue';
+  ELSE
+    REQUIRE LENGTH(JSON_STRING($input, 'displayName')) > 0 AND LENGTH(JSON_STRING($input, 'displayName')) <= 256
+      ELSE 'invalidValue';
+    LET members = JSON_ARRAY_OR_DEFAULT($input, 'members', []);
+    REQUIRE LENGTH(members) <= 1000 ELSE 'tooMany';
+    VAR ids SET<TEXT> = SET();
+    FOR member IN members DO
+      REQUIRE IS_SUBSET(JSON_KEYS(member), SET('value', 'display', '$ref', 'type')) ELSE 'invalidValue';
+      LET id = JSON_STRING(member, 'value');
+      REQUIRE LENGTH(id) > 0 AND LENGTH(id) <= 256 AND NOT CONTAINS(ids, id) ELSE 'invalidValue';
+      REQUIRE OPTION_ALL(JSON_OPTION_STRING(member, 'type'), value => value = 'User') ELSE 'invalidValue';
+      SET ids = SET_ADD(ids, id);
+    END FOR;
+  END IF;
+  RETURN $input;
+END;
+
+CREATE PUBLIC FUNCTION definition(kind TEXT) RETURNS JSON AS BEGIN
+  LET simple = CASE WHEN $kind = 'Users' THEN [
+    ROW(name => 'userName', type => 'string', required => TRUE, unique => 'server'),
+    ROW(name => 'displayName', type => 'string', required => FALSE, unique => 'none'),
+    ROW(name => 'active', type => 'boolean', required => FALSE, unique => 'none')
+  ] ELSE [ROW(name => 'displayName', type => 'string', required => TRUE, unique => 'none')] END;
+  VAR attributes LIST<JSON> = MAP_LIST(simple, field => JSON_OBJECT(
+    'name', field.name, 'type', field.type, 'multiValued', FALSE, 'required', field.required,
+    'caseExact', FALSE, 'mutability', 'readWrite', 'returned', 'default', 'uniqueness', field.unique));
+  IF $kind = 'Users' THEN
+    SET attributes = APPEND(attributes, JSON_OBJECT('name', 'name', 'type', 'complex', 'multiValued', FALSE,
+      'required', FALSE, 'mutability', 'readWrite', 'returned', 'default',
+      'subAttributes', JSON_FROM_LIST(MAP_LIST(['givenName', 'familyName'], name =>
+        JSON_OBJECT('name', name, 'type', 'string', 'multiValued', FALSE, 'required', FALSE,
+          'mutability', 'readWrite', 'returned', 'default', 'caseExact', FALSE)))));
+    SET attributes = APPEND(attributes, JSON '{"name":"emails","type":"complex","multiValued":true,"required":false,"mutability":"readWrite","returned":"default","subAttributes":[{"name":"value","type":"string","multiValued":false,"required":true,"caseExact":false},{"name":"type","type":"string","multiValued":false,"required":false,"caseExact":false},{"name":"primary","type":"boolean","multiValued":false,"required":false}]}');
+  ELSE
+    SET attributes = APPEND(attributes, JSON '{"name":"members","type":"complex","multiValued":true,"required":false,"mutability":"readWrite","returned":"default","subAttributes":[{"name":"value","type":"string","multiValued":false,"required":true,"caseExact":true},{"name":"display","type":"string","multiValued":false,"required":false,"mutability":"readOnly"},{"name":"type","type":"string","multiValued":false,"required":false,"mutability":"readOnly"},{"name":"$ref","type":"reference","multiValued":false,"required":false,"referenceTypes":["User"],"mutability":"readOnly"}]}');
+  END IF;
+  RETURN JSON_OBJECT('schemas', JSON_ARRAY_OF('urn:ietf:params:scim:schemas:core:2.0:Schema'),
+    'id', schema_id($kind), 'name', CASE WHEN $kind = 'Users' THEN 'User' ELSE 'Group' END,
+    'attributes', JSON_FROM_LIST(attributes));
+END;

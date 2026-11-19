@@ -1,0 +1,7 @@
+DEPENDENCY oauth FROM WORKSPACE 'oauth';
+EXPORT MODULE Client FROM './src/client.transit';
+EXPORT MODULE Provider FROM './src/provider.transit';
+EXPORT TARGET default FROM './examples/build.transit';
+EXPORT TEST TARGET tests FROM './tests/build.transit';
+EXPORT MODULE Http FROM './src/http.transit';
+EXPORT TARGET http FROM './examples/build.transit';

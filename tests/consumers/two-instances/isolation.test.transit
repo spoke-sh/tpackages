@@ -1,0 +1,22 @@
+TEST 'two instances do not share challenges'
+  USING MODULES (app) AS BEGIN
+  ACTIVATE TEST MODULE app;
+  SET TEST OWNER 'browser-1';
+  SET TEST SECRET 'example.oauth.client_secret' TO 'client-secret';
+  LET browser = TEST SECRET 'browser-binding-32-bytes-minimum!!';
+  LET started = INVOKE COMMAND app.instance_0.api.begin_authorization(browser, NONE);
+  LET query = URL_QUERY_UNIQUE(started.location);
+  ASSERT INVOKE COMMAND app.instance_1.api.accept_callback(query['state'], browser, query['redirect_uri'],
+    NONE, SOME(TEST SECRET 'code'), NONE) FAILS WITH 'InvalidCallback';
+  ASSERT SINK app.instance_1.api.token DISPATCH COUNT = 0;
+  MOCK SINK app.instance_0.api.token RETURNS STATUS 200 BODY TEST SECRET JSON
+    '{"access_token":"token","token_type":"bearer","expires_in":3600}';
+  INVOKE COMMAND app.instance_0.api.accept_callback(query['state'], browser, query['redirect_uri'],
+    NONE, SOME(TEST SECRET 'code'), NONE);
+  DRAIN MODULE app WITHIN 100 STEPS;
+  ASSERT (SELECT COUNT(*) FROM app.observed_0) = 1;
+  ASSERT (SELECT COUNT(*) FROM app.observed_1) = 0;
+  ASSERT (SELECT COUNT(*) FROM TEST STREAM app.instance_1.api.completions) = 0;
+  SET TEST OWNER 'unrelated-owner';
+  ASSERT (SELECT COUNT(*) FROM app.observed_0) = 0;
+END;

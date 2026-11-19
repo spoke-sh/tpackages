@@ -1,0 +1,21 @@
+CREATE PUBLIC FUNCTION client_data(challenge TEXT, ceremony TEXT, origin TEXT) RETURNS BYTES AS BEGIN
+  RETURN UTF8(JSON_SERIALIZE(JSON_OBJECT('type', $ceremony, 'challenge', $challenge,
+    'origin', $origin, 'crossOrigin', FALSE)));
+END;
+
+CREATE PUBLIC FUNCTION auth_data(counter BIGINT, registration BOOLEAN, flags BIGINT) RETURNS BYTES TEST ONLY AS BEGIN
+  LET header = CONCAT_BYTES(SHA256(UTF8('example.test')), BYTE($flags), ENCODE_UINT32_BE($counter));
+  IF NOT $registration THEN RETURN header; END IF;
+  LET point = EC_PUBLIC_COORDINATES(TEST_PUBLIC_KEY('credential'));
+  LET key = CBOR_ENCODE(CBOR_MAP(1 => 2, 3 => -7, -1 => 1, -2 => point.x, -3 => point.y));
+  RETURN CONCAT_BYTES(header, ZERO_BYTES(16), ENCODE_UINT16_BE(12), UTF8('credential-1'), key);
+END;
+
+CREATE PUBLIC FUNCTION attestation() RETURNS BYTES TEST ONLY AS BEGIN
+  RETURN CBOR_ENCODE(CBOR_MAP('fmt' => 'none', 'attStmt' => CBOR_MAP(),
+    'authData' => auth_data(0, TRUE, 69)));
+END;
+
+CREATE PUBLIC FUNCTION signature(auth_data BYTES, client_data BYTES) RETURNS BYTES TEST ONLY AS BEGIN
+  RETURN CRYPTO_SIGN('ES256-DER', TEST_PRIVATE_KEY('credential'), CONCAT_BYTES($auth_data, SHA256($client_data)));
+END;

@@ -1,0 +1,41 @@
+-- Native Source tests, shared by the generic core and all three adapters.
+TEST 'HTTP initiation sets a protected cookie and callback duplicates never admit work'
+  USING MODULES (app) AS BEGIN
+  ACTIVATE TEST MODULE app;
+  SET TEST OWNER 'browser-1';
+  SET TEST SECRET 'example.oauth.client_secret' TO 'client-secret';
+  LET begun = SIMULATE HTTP SOURCE app.http.begin(ROW(method => 'POST',
+    headers => MAP('Origin' => 'https://app.example.test'), raw_body => NONE));
+  ASSERT begun.status = 303;
+  ASSERT begun.headers['Cache-Control'] = 'no-store';
+  ASSERT HTTP COOKIE begun '__Host-tpackages_login' HAS ATTRIBUTES
+    (secure = TRUE, http_only = TRUE, same_site = 'Lax', path = '/');
+  LET query = URL_QUERY_UNIQUE(begun.headers['Location']);
+  LET cookie = TEST RESPONSE COOKIE begun '__Host-tpackages_login';
+  LET duplicate = SIMULATE HTTP SOURCE app.http.callback(ROW(method => 'GET',
+    headers => MAP('Cookie' => cookie), raw_query =>
+      'state=' || query['state'] || '&code=first&code=second', raw_body => NONE));
+  ASSERT duplicate.status = 400;
+  ASSERT SINK app.api.token DISPATCH COUNT = 0;
+  -- Decoder refusal leaves the challenge usable. A denial is a terminal event,
+  -- even though the HTTP response only acknowledges the admitted operation.
+  LET denied = SIMULATE HTTP SOURCE app.http.callback(ROW(method => 'GET',
+    headers => MAP('Cookie' => cookie), raw_query =>
+      'state=' || query['state'] || '&error=access_denied', raw_body => NONE));
+  ASSERT denied.status = 202;
+  DRAIN MODULE app WITHIN 100 STEPS;
+  ASSERT (SELECT COUNT(*) FROM app.observed) = 1;
+  ASSERT SINK app.api.token DISPATCH COUNT = 0;
+  ASSERT NO SECRET IN LOGS;
+END;
+
+TEST 'HTTP initiation refuses a foreign origin before creating a challenge'
+  USING MODULES (app) AS BEGIN
+  ACTIVATE TEST MODULE app;
+  SET TEST SECRET 'example.oauth.client_secret' TO 'client-secret';
+  LET denied = SIMULATE HTTP SOURCE app.http.begin(ROW(method => 'POST',
+    headers => MAP('Origin' => 'https://foreign.example.test'), raw_body => NONE));
+  ASSERT denied.status = 403;
+  ASSERT NOT MAP_HAS(denied.headers, 'Location');
+  ASSERT NOT MAP_HAS(denied.headers, 'Set-Cookie');
+END;

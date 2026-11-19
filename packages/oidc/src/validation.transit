@@ -1,0 +1,53 @@
+-- OIDC Core 3.1.3.7; initial JOSE profile is signed RS256, no JWE.
+CREATE PUBLIC FUNCTION validate_id_token(
+  token SECRET<TEXT>, access SECRET<TEXT>, keys JSON, issuer TEXT, client_id TEXT,
+  nonce TEXT, now BIGINT, skew BIGINT, max_age BIGINT, auth_age OPTION<BIGINT>
+) RETURNS ROW(issuer TEXT, subject TEXT, audience TEXT,
+  authenticated_at OPTION<BIGINT>, expires_at BIGINT) AS BEGIN
+  LET jws = JWS_DECODE($token, max_bytes => 32768, duplicate_keys => 'reject');
+  LET header = jws.header;
+  REQUIRE PUBLIC_FIELD(header, 'alg', TYPE TEXT) = 'RS256' ELSE 'UnsupportedAlgorithm';
+  REQUIRE NOT JSON_HAS(header, 'crit') AND NOT JSON_HAS(header, 'jku')
+    AND NOT JSON_HAS(header, 'x5u') AND NOT JSON_HAS(header, 'b64') ELSE 'UnsupportedJOSEHeader';
+  LET kid = PUBLIC_OPTION_FIELD(header, 'kid', TYPE TEXT);
+  LET candidates = FILTER(JSON_ARRAY($keys, 'keys', 64), key =>
+    JSON_STRING(key, 'kty') = 'RSA'
+    AND OPTION_ALL(kid, value => JSON_OPTION_STRING(key, 'kid') = SOME(value))
+    AND OPTION_ALL(JSON_OPTION_STRING(key, 'use'), value => value = 'sig')
+    AND OPTION_ALL(JSON_OPTION_STRING(key, 'alg'), value => value = 'RS256')
+    AND OPTION_ALL(JSON_OPTION_ARRAY(key, 'key_ops', 8), value => CONTAINS(value, 'verify')));
+  REQUIRE LENGTH(candidates) > 0 ELSE 'RefreshKeysRequired';
+  REQUIRE LENGTH(candidates) = 1 ELSE 'AmbiguousSigningKey';
+  LET key = JWK_PUBLIC_KEY(ONLY(candidates), min_rsa_bits => 2048);
+  REQUIRE CRYPTO_VERIFY('RS256', key, jws.signing_input, jws.signature) ELSE 'InvalidSignature';
+  LET claims = jws.payload;
+  REQUIRE PUBLIC_FIELD(claims, 'iss', TYPE TEXT) = $issuer ELSE 'IssuerMismatch';
+  LET subject = PUBLIC_FIELD(claims, 'sub', TYPE TEXT);
+  REQUIRE LENGTH(subject) > 0 AND LENGTH(subject) <= 255 ELSE 'InvalidSubject';
+  LET audience = PUBLIC_FIELD(claims, 'aud', TYPE TEXT_OR_LIST_TEXT);
+  LET audiences = MATCH audience WHEN Text(value) THEN [value] WHEN Texts(values) THEN values END;
+  REQUIRE LENGTH(audiences) > 0 AND LENGTH(audiences) <= 16
+    AND CONTAINS(audiences, $client_id) ELSE 'AudienceMismatch';
+  LET azp = PUBLIC_OPTION_FIELD(claims, 'azp', TYPE TEXT);
+  REQUIRE (LENGTH(audiences) = 1 OR azp = SOME($client_id))
+    AND OPTION_ALL(azp, value => value = $client_id) ELSE 'AuthorizedPartyMismatch';
+  LET expiry = PUBLIC_FIELD(claims, 'exp', TYPE BIGINT);
+  LET issued = PUBLIC_FIELD(claims, 'iat', TYPE BIGINT);
+  REQUIRE expiry > $now - $skew AND issued <= $now + $skew
+    AND issued >= $now - $max_age - $skew AND expiry > issued ELSE 'InvalidTokenTime';
+  REQUIRE OPTION_ALL(PUBLIC_OPTION_FIELD(claims, 'nbf', TYPE BIGINT), value => value <= $now + $skew)
+    ELSE 'TokenNotYetValid';
+  REQUIRE SECURE_EQUAL(PUBLIC_FIELD(claims, 'nonce', TYPE TEXT), $nonce) ELSE 'NonceMismatch';
+  LET authenticated = PUBLIC_OPTION_FIELD(claims, 'auth_time', TYPE BIGINT);
+  REQUIRE OPTION_ALL(authenticated, value => value <= $now + $skew) ELSE 'InvalidAuthenticationTime';
+  IF IS_PRESENT($auth_age) THEN
+    REQUIRE IS_PRESENT(authenticated)
+      AND REQUIRE_SOME(authenticated) >= $now - REQUIRE_SOME($auth_age) - $skew ELSE 'AuthenticationTooOld';
+  END IF;
+  IF JSON_HAS(claims, 'at_hash') THEN
+    REQUIRE SECURE_EQUAL(PUBLIC_FIELD(claims, 'at_hash', TYPE TEXT),
+      BASE64URL(SLICE(SHA256($access), 0, 16))) ELSE 'AccessTokenHashMismatch';
+  END IF;
+  RETURN ROW(issuer => $issuer, subject => subject, audience => $client_id,
+    authenticated_at => authenticated, expires_at => expiry);
+END;

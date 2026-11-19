@@ -1,0 +1,43 @@
+CREATE DATAFLOW oidc.discover FROM COMMAND () AS request
+  WITH (idempotency = 'original_owner_request') AS BEGIN ATOMIC
+  REQUIRE NOT EXISTS (SELECT id FROM oidc.discovery WHERE status = 'pending') ELSE 'DiscoveryPending';
+  LET basis = OPTION_MAP((SELECT OPTIONAL _revision FROM oidc.metadata WHERE id = $config.issuer), row => row._revision);
+  LET id = OPERATION_ID(CURRENT_REQUEST_ID(), 'discovery');
+  INSERT INTO oidc.discovery VALUES (id, CURRENT_OWNER(), 'pending');
+  ENQUEUE INTO oidc.discovery_jobs VALUES (id, CURRENT_OWNER(), basis);
+  RETURN id;
+END;
+
+CREATE DATAFLOW oidc.fetch_metadata FROM QUEUE oidc.discovery_jobs AS job AS BEGIN
+  REQUIRE job.owner = CURRENT_OWNER() ELSE 'Forbidden';
+  IF (SELECT ONE status FROM oidc.discovery WHERE id = job.id).status <> 'pending' THEN RETURN; END IF;
+    LET configuration = EXECUTE SINK oidc.configuration EFFECT OPERATION_ID(job.id, 'configuration') ON REPLAY OBSERVE ONLY;
+    REQUIRE configuration.outcome <> 'unknown' ELSE 'DiscoveryOutcomeUnknown';
+    REQUIRE configuration.outcome = 'known' AND configuration.status = 200 ELSE 'DiscoveryUnavailable';
+    LET document = JSON_PARSE(configuration.body, max_bytes => 65536, max_depth => 8, duplicate_keys => 'reject');
+    REQUIRE JSON_STRING(document, 'issuer') = $config.issuer ELSE 'IssuerMismatch';
+    REQUIRE JSON_STRING(document, 'authorization_endpoint') = $config.authorization_endpoint
+      AND JSON_STRING(document, 'token_endpoint') = $config.token_endpoint
+      AND JSON_STRING(document, 'jwks_uri') = $config.jwks_uri ELSE 'EndpointChanged';
+    REQUIRE CONTAINS(JSON_ARRAY(document, 'response_types_supported', 32), 'code')
+      AND CONTAINS(JSON_ARRAY(document, 'id_token_signing_alg_values_supported', 32), 'RS256')
+      AND CONTAINS(JSON_ARRAY(document, 'code_challenge_methods_supported', 8), 'S256')
+      AND CONTAINS(JSON_ARRAY_OR_DEFAULT(document, 'token_endpoint_auth_methods_supported', ['client_secret_basic']),
+        $config.client_auth) ELSE 'UnsupportedProviderProfile';
+    LET jwks = EXECUTE SINK oidc.jwks EFFECT OPERATION_ID(job.id, 'jwks') ON REPLAY OBSERVE ONLY;
+    REQUIRE jwks.outcome <> 'unknown' ELSE 'KeysOutcomeUnknown';
+    REQUIRE jwks.outcome = 'known' AND jwks.status = 200 ELSE 'KeysUnavailable';
+    LET keys = JSON_PARSE(jwks.body, max_bytes => 65536, max_depth => 8, duplicate_keys => 'reject');
+    REQUIRE LENGTH(JSON_ARRAY(keys, 'keys', 64)) > 0 ELSE 'EmptyKeySet';
+    BEGIN ATOMIC
+      REQUIRE OPTION_MAP((SELECT OPTIONAL _revision FROM oidc.metadata WHERE id = $config.issuer), row => row._revision)
+        = job.basis ELSE 'MetadataChanged';
+      UPSERT INTO oidc.metadata VALUES ($config.issuer, document, keys, job.id, NOW() + SECONDS($config.metadata_seconds));
+      UPDATE oidc.discovery SET status = 'complete' WHERE id = job.id AND status = 'pending';
+    END;
+  ON FAILURE failure
+    BEGIN ATOMIC
+      UPDATE oidc.discovery SET status = CASE WHEN failure.effect_outcome = 'unknown' OR failure.code IN ('DiscoveryOutcomeUnknown', 'KeysOutcomeUnknown')
+        THEN 'unknown' ELSE 'refused' END WHERE id = job.id AND status = 'pending';
+    END;
+  END;

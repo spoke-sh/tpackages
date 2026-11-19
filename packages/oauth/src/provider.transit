@@ -1,0 +1,36 @@
+IMPORT types FROM './types.transit';
+
+CREATE PUBLIC INTERFACE Provider AS BEGIN
+  FUNCTION metadata() RETURNS types.ProviderMetadata PURE;
+  FUNCTION normalize(body SECRET<JSON>, requested SET<TEXT>) RETURNS types.Grant PURE;
+END;
+
+CREATE PUBLIC MODULE StaticProvider(metadata types.ProviderMetadata) AS BEGIN
+  CREATE PUBLIC FUNCTION metadata() RETURNS types.ProviderMetadata AS BEGIN
+    RETURN $metadata;
+  END;
+
+  CREATE PUBLIC FUNCTION normalize(body SECRET<JSON>, requested SET<TEXT>)
+    RETURNS types.Grant AS BEGIN
+    REQUIRE NOT JSON_HAS($body, 'error') ELSE 'ProviderRejected';
+    LET token = SECRET_JSON_STRING($body, 'access_token', 16384);
+    REQUIRE LENGTH(token) > 0 ELSE 'InvalidTokenResponse';
+    REQUIRE LOWER(PUBLIC_FIELD($body, 'token_type', TYPE TEXT)) = 'bearer'
+      ELSE 'UnsupportedTokenType';
+    LET scope = PUBLIC_OPTION_FIELD($body, 'scope', TYPE TEXT);
+    LET scopes = MATCH scope
+      WHEN NONE THEN $requested
+      WHEN SOME(value) THEN SET_FROM_LIST(SPLIT(value, $metadata.response_scope_separator))
+    END;
+    REQUIRE IS_SUBSET(scopes, $requested) ELSE 'UnexpectedScope';
+    LET expiry = PUBLIC_OPTION_FIELD($body, 'expires_in', TYPE BIGINT);
+    LET refresh_expiry = PUBLIC_OPTION_FIELD($body, 'refresh_token_expires_in', TYPE BIGINT);
+    REQUIRE OPTION_ALL(expiry, value => value > 0 AND value <= 31536000)
+      AND OPTION_ALL(refresh_expiry, value => value > 0 AND value <= 31536000)
+      ELSE 'InvalidTokenLifetime';
+    RETURN ROW(access => token,
+      refresh => SECRET_JSON_OPTION_STRING($body, 'refresh_token', 16384),
+      id_token => SECRET_JSON_OPTION_STRING($body, 'id_token', 32768),
+      scopes => scopes, expires_in => expiry, refresh_expires_in => refresh_expiry);
+  END;
+END;

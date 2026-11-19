@@ -1,0 +1,51 @@
+CREATE DATAFLOW saml.begin_sso FROM COMMAND (browser SECRET<TEXT>) AS request
+  WITH (idempotency = 'original_owner_request') AS BEGIN ATOMIC
+  REQUIRE LENGTH(request.browser) >= 32 ELSE 'BrowserBindingRequired';
+  LET trust = SELECT ONE * FROM saml.trust WHERE id = 'idp';
+  REQUIRE trust.enabled ELSE 'TrustDisabled';
+  LET id = '_' || OPERATION_ID(CURRENT_REQUEST_ID(), 'saml-request');
+  LET relay = RANDOM_TOKEN(32);
+  LET expires = NOW() + SECONDS($config.request_seconds);
+  LET authn_request = XML_ELEMENT('{urn:oasis:names:tc:SAML:2.0:protocol}AuthnRequest', MAP(
+    'ID' => id, 'Version' => '2.0', 'IssueInstant' => TIMESTAMP_FORMAT(NOW()),
+    'Destination' => $config.sso_endpoint, 'AssertionConsumerServiceURL' => $config.acs_url,
+    'ProtocolBinding' => 'urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST'), [
+      XML_ELEMENT('{urn:oasis:names:tc:SAML:2.0:assertion}Issuer', MAP(), [XML_TEXT_NODE($config.entity_id)])
+    ]);
+  LET unsigned = 'SAMLRequest=' || PERCENT_ENCODE(BASE64(DEFLATE_RAW(XML_SERIALIZE(authn_request))))
+    || '&RelayState=' || PERCENT_ENCODE(relay)
+    || '&SigAlg=' || PERCENT_ENCODE('http://www.w3.org/2001/04/xmldsig-more#rsa-sha256');
+  LET secret = SECRET($config.signing_secret);
+  LET signature = CRYPTO_SIGN('RS256', secret, UTF8(unsigned));
+  REQUIRE SECRET_CURRENT(secret) ELSE 'ConfigurationChanged';
+  LET key = HEX(SHA256(relay));
+  PUT INTO saml.requests KEY key VALUE ROW(id => id, owner => CURRENT_OWNER(),
+    browser_hash => COMMITMENT(request.browser), expires_at => expires, consumed => FALSE,
+    trust_revision => trust._revision) IF ABSENT;
+  INSERT INTO saml.request_expiry VALUES (key, expires);
+  RETURN ROW(location => $config.sso_endpoint || '?' || unsigned
+    || '&Signature=' || PERCENT_ENCODE(BASE64(signature)), expires_at => expires);
+END;
+
+CREATE DATAFLOW saml.accept_assertion FROM COMMAND (
+  relay_state TEXT, browser SECRET<TEXT>, encoded_response SECRET<TEXT>
+) AS input WITH (idempotency = 'original_owner_request') AS BEGIN ATOMIC
+  REQUIRE LENGTH(input.relay_state) = 43 AND LENGTH(input.encoded_response) <= 349528 ELSE 'InvalidResponse';
+  LET key = HEX(SHA256(input.relay_state));
+  LET observed = MATCH (GET FROM saml.requests KEY key)
+    WHEN SOME(value) THEN value ELSE FAIL 'InvalidRequest' END;
+  LET request = observed.value;
+  REQUIRE saml.require_request(request, input.browser);
+  LET trust = SELECT ONE * FROM saml.trust WHERE id = 'idp';
+  LET result = validation.validate(BASE64_DECODE(input.encoded_response, max_bytes => 262144),
+    request.id, $config WITH (trusted_signing_keys = trust.keys), NOW());
+  REQUIRE ALL(trust.keys, key => PUBLIC_KEY_CURRENT(key)) ELSE 'TrustChanged';
+  LET replay_key = HEX(SHA256(LENGTH_PREFIXED_UTF8([$config.idp_entity_id, result.assertion_id])));
+  LET retain_until = result.identity.expires_at;
+  PUT INTO saml.replay KEY replay_key VALUE ROW(expires_at => retain_until) IF ABSENT ELSE FAIL 'AssertionReplayed';
+  INSERT INTO saml.replay_expiry VALUES (replay_key, retain_until);
+  PUT INTO saml.requests KEY key VALUE request WITH (consumed = TRUE) IF REVISION = observed.revision;
+  PRODUCE INTO saml.completions VALUES (OPERATION_ID(CURRENT_REQUEST_ID(), 'saml-identity'),
+    CURRENT_OWNER(), result.identity, NOW());
+  RETURN result.identity;
+END;

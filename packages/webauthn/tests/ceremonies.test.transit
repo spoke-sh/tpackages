@@ -1,0 +1,166 @@
+IMPORT library FROM '../build.transit';
+IMPORT fixtures FROM './fixtures.transit';
+
+TEST 'register a credential and verify an assertion without creating an application session'
+  USING MODULES (app) AS BEGIN
+  ACTIVATE TEST MODULE app;
+  SET TEST OWNER 'example-user';
+  SET TEST KEY 'credential' ALGORITHM 'P-256';
+  LET browser = TEST SECRET 'browser-binding-32-bytes-minimum!!';
+  LET registration = INVOKE COMMAND app.api.begin_registration(browser, UTF8('user-1'), 'alice', 'Alice');
+  LET client = fixtures.client_data(JSON_STRING(registration.public_key, 'challenge'), 'webauthn.create', 'https://app.example.test');
+  INVOKE COMMAND app.api.accept_registration(registration.id, browser, UTF8('credential-1'), client, fixtures.attestation());
+  ASSERT INVOKE COMMAND app.api.accept_registration(registration.id, browser, UTF8('credential-1'), client, fixtures.attestation())
+    FAILS WITH 'InvalidChallenge';
+  LET authentication = INVOKE COMMAND app.api.begin_authentication(browser, SOME(UTF8('user-1')));
+  LET client = fixtures.client_data(JSON_STRING(authentication.public_key, 'challenge'), 'webauthn.get', 'https://app.example.test');
+  LET authenticator = fixtures.auth_data(1, FALSE, 5);
+  LET identity = INVOKE COMMAND app.api.accept_authentication(authentication.id, browser, UTF8('credential-1'), SOME(UTF8('user-1')),
+    client, authenticator, fixtures.signature(authenticator, client));
+  ASSERT identity.user_handle = UTF8('user-1');
+  ASSERT NOT identity.counter_warning;
+  ASSERT INVOKE COMMAND app.api.accept_authentication(authentication.id, browser, UTF8('credential-1'), SOME(UTF8('user-1')),
+    client, authenticator, fixtures.signature(authenticator, client)) FAILS WITH 'InvalidChallenge';
+END;
+
+TEST 'origin, challenge, ceremony, and user verification failures cannot register'
+  USING MODULES (app) AS BEGIN
+  ACTIVATE TEST MODULE app;
+  SET TEST OWNER 'example-user';
+  SET TEST KEY 'credential' ALGORITHM 'P-256';
+  LET browser = TEST SECRET 'browser-binding-32-bytes-minimum!!';
+  LET registration = INVOKE COMMAND app.api.begin_registration(browser, UTF8('user-1'), 'alice', 'Alice');
+  LET challenge = JSON_STRING(registration.public_key, 'challenge');
+  ASSERT INVOKE COMMAND app.api.accept_registration(registration.id, browser, UTF8('credential-1'),
+    fixtures.client_data(challenge, 'webauthn.create', 'https://attacker.example'), fixtures.attestation()) FAILS WITH 'OriginMismatch';
+  ASSERT INVOKE COMMAND app.api.accept_registration(registration.id, browser, UTF8('credential-1'),
+    fixtures.client_data(BASE64URL(ZERO_BYTES(32)), 'webauthn.create', 'https://app.example.test'), fixtures.attestation()) FAILS WITH 'ChallengeMismatch';
+  ASSERT INVOKE COMMAND app.api.accept_registration(registration.id, browser, UTF8('credential-1'),
+    fixtures.client_data(challenge, 'webauthn.get', 'https://app.example.test'), fixtures.attestation()) FAILS WITH 'WrongCeremony';
+  ASSERT library.decode_authenticator(fixtures.auth_data(0, TRUE, 65), TRUE, 'example.test', TRUE)
+    FAILS WITH 'UserVerificationRequired';
+  ASSERT library.decode_authenticator(fixtures.auth_data(0, TRUE, 69), TRUE, 'attacker.example', TRUE)
+    FAILS WITH 'RPIDMismatch';
+END;
+
+TEST 'zero counters remain usable and nonincreasing nonzero counters are a policy signal'
+  USING MODULES (app) AS BEGIN
+  ACTIVATE TEST MODULE app;
+  SET TEST OWNER 'example-user';
+  SET TEST KEY 'credential' ALGORITHM 'P-256';
+  LET browser = TEST SECRET 'browser-binding-32-bytes-minimum!!';
+  LET registration = INVOKE COMMAND app.api.begin_registration(browser, UTF8('user-1'), 'alice', 'Alice');
+  INVOKE COMMAND app.api.accept_registration(registration.id, browser, UTF8('credential-1'),
+    fixtures.client_data(JSON_STRING(registration.public_key, 'challenge'), 'webauthn.create', 'https://app.example.test'), fixtures.attestation());
+  FOR case IN [ROW(counter => 0, warning => FALSE), ROW(counter => 5, warning => FALSE), ROW(counter => 4, warning => TRUE)] DO
+    LET started = INVOKE COMMAND app.api.begin_authentication(browser, NONE);
+    LET client = fixtures.client_data(JSON_STRING(started.public_key, 'challenge'), 'webauthn.get', 'https://app.example.test');
+    LET data = fixtures.auth_data(case.counter, FALSE, 5);
+    LET result = INVOKE COMMAND app.api.accept_authentication(started.id, browser, UTF8('credential-1'), SOME(UTF8('user-1')),
+      client, data, fixtures.signature(data, client));
+    ASSERT result.counter_warning = case.warning;
+  END FOR;
+END;
+
+TEST 'registration requires current application policy and a live challenge'
+  USING MODULES (app) AS BEGIN
+  ACTIVATE TEST MODULE app;
+  SET TEST CLOCK '2026-01-01T00:00:00Z';
+  SET TEST OWNER 'attacker';
+  LET browser = TEST SECRET 'browser-binding-32-bytes-minimum!!';
+  ASSERT INVOKE COMMAND app.api.begin_registration(browser, UTF8('user-1'), 'alice', 'Alice') FAILS WITH 'Forbidden';
+  SET TEST OWNER 'example-user';
+  SET TEST KEY 'credential' ALGORITHM 'P-256';
+  LET started = INVOKE COMMAND app.api.begin_registration(browser, UTF8('user-1'), 'alice', 'Alice');
+  ADVANCE TEST CLOCK BY SECONDS(300);
+  ASSERT INVOKE COMMAND app.api.accept_registration(started.id, browser, UTF8('credential-1'),
+    fixtures.client_data(JSON_STRING(started.public_key, 'challenge'), 'webauthn.create', 'https://app.example.test'), fixtures.attestation())
+    FAILS WITH 'InvalidChallenge';
+END;
+
+TEST 'invalid signatures and user handles leave the authentication unconsumed'
+  USING MODULES (app) AS BEGIN
+  ACTIVATE TEST MODULE app;
+  SET TEST OWNER 'example-user';
+  SET TEST KEY 'credential' ALGORITHM 'P-256';
+  LET browser = TEST SECRET 'browser-binding-32-bytes-minimum!!';
+  LET registration = INVOKE COMMAND app.api.begin_registration(browser, UTF8('user-1'), 'alice', 'Alice');
+  INVOKE COMMAND app.api.accept_registration(registration.id, browser, UTF8('credential-1'),
+    fixtures.client_data(JSON_STRING(registration.public_key, 'challenge'), 'webauthn.create', 'https://app.example.test'), fixtures.attestation());
+  LET started = INVOKE COMMAND app.api.begin_authentication(browser, NONE);
+  LET client = fixtures.client_data(JSON_STRING(started.public_key, 'challenge'), 'webauthn.get', 'https://app.example.test');
+  LET data = fixtures.auth_data(1, FALSE, 5);
+  ASSERT INVOKE COMMAND app.api.accept_authentication(started.id, browser, UTF8('credential-1'), SOME(UTF8('other-user')),
+    client, data, fixtures.signature(data, client)) FAILS WITH 'UserHandleMismatch';
+  ASSERT INVOKE COMMAND app.api.accept_authentication(started.id, browser, UTF8('credential-1'), SOME(UTF8('user-1')),
+    client, data, ZERO_BYTES(64)) FAILS WITH 'InvalidSignature';
+  ASSERT (INVOKE COMMAND app.api.accept_authentication(started.id, browser, UTF8('credential-1'), SOME(UTF8('user-1')),
+    client, data, fixtures.signature(data, client))).user_handle = UTF8('user-1');
+END;
+
+TEST 'ceremony state, result event, and application checkpoint survive one commit'
+  USING MODULES (app) AS BEGIN
+  ACTIVATE TEST MODULE app;
+  SET TEST OWNER 'example-user';
+  SET TEST KEY 'credential' ALGORITHM 'P-256';
+  LET browser = TEST SECRET 'browser-binding-32-bytes-minimum!!';
+  LET start = INVOKE COMMAND app.api.begin_registration(browser, UTF8('user-1'), 'alice', 'Alice');
+  LET client = fixtures.client_data(JSON_STRING(start.public_key, 'challenge'), 'webauthn.create', 'https://app.example.test');
+  INVOKE COMMAND app.api.accept_registration(start.id, browser, UTF8('credential-1'), client, fixtures.attestation())
+    WITH REQUEST_ID 'register-1';
+  CRASH BEFORE CHECKPOINT CONSUMER 'example.results';
+  DRAIN MODULE app WITHIN 100 STEPS;
+  RESTART;
+  INVOKE COMMAND app.api.accept_registration(start.id, browser, UTF8('credential-1'), client, fixtures.attestation())
+    WITH REQUEST_ID 'register-1';
+  DRAIN MODULE app WITHIN 100 STEPS;
+  ASSERT (SELECT COUNT(*) FROM app.api.credential_metadata) = 1;
+  ASSERT (SELECT COUNT(*) FROM app.observed) = 1;
+  ASSERT (SELECT COUNT(*) FROM TEST STREAM app.api.completions) = 1;
+  SET TEST OWNER 'attacker';
+  ASSERT (SELECT COUNT(*) FROM app.api.credential_metadata) = 0;
+  ASSERT (SELECT COUNT(*) FROM TEST STREAM app.api.completions) = 0;
+END;
+
+TEST 'policy changes invalidate outstanding ceremonies and cleanup never revives them'
+  USING MODULES (app) AS BEGIN
+  ACTIVATE TEST MODULE app;
+  SET TEST OWNER 'example-user';
+  SET TEST KEY 'credential' ALGORITHM 'P-256';
+  LET browser = TEST SECRET 'browser-binding-32-bytes-minimum!!';
+  LET start = INVOKE COMMAND app.api.begin_registration(browser, UTF8('user-1'), 'alice', 'Alice');
+  GRANT TEST ACTION 'configure' ON MODULE app.api TO OWNER 'operator';
+  SET TEST OWNER 'operator';
+  LET policy = SELECT ONE * FROM app.api.policy_status;
+  INVOKE COMMAND app.api.configure_policy(TRUE, TRUE, TRUE, policy.revision);
+  SET TEST OWNER 'example-user';
+  ASSERT INVOKE COMMAND app.api.accept_registration(start.id, browser, UTF8('credential-1'),
+    fixtures.client_data(JSON_STRING(start.public_key, 'challenge'), 'webauthn.create', 'https://app.example.test'),
+    fixtures.attestation()) FAILS WITH 'PolicyChanged';
+  ADVANCE TEST CLOCK BY SECONDS(601);
+  DRAIN MODULE app WITHIN 100 STEPS;
+  ASSERT INVOKE COMMAND app.api.accept_registration(start.id, browser, UTF8('credential-1'),
+    fixtures.client_data(JSON_STRING(start.public_key, 'challenge'), 'webauthn.create', 'https://app.example.test'),
+    fixtures.attestation()) FAILS WITH 'InvalidChallenge';
+  ASSERT (SELECT COUNT(*) FROM TEST STREAM app.api.completions) = 0;
+END;
+
+TEST 'concurrent registration claims commit one credential and one event'
+  USING MODULES (app) AS BEGIN
+  ACTIVATE TEST MODULE app;
+  SET TEST OWNER 'example-user';
+  SET TEST KEY 'credential' ALGORITHM 'P-256';
+  LET browser = TEST SECRET 'browser-binding-32-bytes-minimum!!';
+  LET start = INVOKE COMMAND app.api.begin_registration(browser, UTF8('user-1'), 'alice', 'Alice');
+  LET client = fixtures.client_data(JSON_STRING(start.public_key, 'challenge'), 'webauthn.create', 'https://app.example.test');
+  LET race = RACE COMMANDS (
+    app.api.accept_registration(start.id, browser, UTF8('credential-1'), client, fixtures.attestation()),
+    app.api.accept_registration(start.id, browser, UTF8('credential-1'), client, fixtures.attestation())
+  ) AT FIRST WRITE;
+  ASSERT race.accepted = 1;
+  ASSERT race.refusals = ['InvalidChallenge'];
+  DRAIN MODULE app WITHIN 100 STEPS;
+  ASSERT (SELECT COUNT(*) FROM app.api.credential_metadata) = 1;
+  ASSERT (SELECT COUNT(*) FROM TEST STREAM app.api.completions) = 1;
+  ASSERT (SELECT COUNT(*) FROM app.observed) = 1;
+END;

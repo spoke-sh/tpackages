@@ -1,0 +1,53 @@
+CREATE FUNCTION response(status BIGINT, body OPTION<JSON>, headers MAP<TEXT, TEXT>) RETURNS types.Response AS BEGIN
+  RETURN ROW(status => $status, body => $body, headers => MAP_MERGE_DISJOINT(MAP(
+    'Content-Type' => 'application/scim+json', 'Cache-Control' => 'no-store'), $headers));
+END;
+
+CREATE FUNCTION stamp(kind TEXT, id TEXT, document JSON, created TEXT, now TEXT, version TEXT) RETURNS JSON AS BEGIN
+  RETURN JSON_SET(JSON_SET($document, 'id', JSON_FROM_TEXT($id)), 'meta', JSON_OBJECT(
+    'resourceType', CASE WHEN $kind = 'Users' THEN 'User' ELSE 'Group' END,
+    'created', $created, 'lastModified', $now,
+    'location', $base_url || '/' || $kind || '/' || PERCENT_ENCODE($id),
+    'version', $version));
+END;
+
+CREATE FUNCTION discovery(path TEXT) RETURNS JSON AS BEGIN
+  IF $path = '/ServiceProviderConfig' THEN
+    RETURN JSON '{"schemas":["urn:ietf:params:scim:schemas:core:2.0:ServiceProviderConfig"],"patch":{"supported":true},"bulk":{"supported":false,"maxOperations":0,"maxPayloadSize":0},"filter":{"supported":true,"maxResults":1000},"changePassword":{"supported":false},"sort":{"supported":false},"etag":{"supported":true},"authenticationSchemes":[]}';
+  END IF;
+  LET schemas = [schema.definition('Users'), schema.definition('Groups')];
+  LET resources = MAP_LIST(['Users', 'Groups'], kind => JSON_OBJECT(
+    'schemas', JSON_ARRAY_OF('urn:ietf:params:scim:schemas:core:2.0:ResourceType'),
+    'id', CASE WHEN kind = 'Users' THEN 'User' ELSE 'Group' END,
+    'name', CASE WHEN kind = 'Users' THEN 'User' ELSE 'Group' END,
+    'endpoint', '/' || kind, 'schema', schema.schema_id(kind), 'schemaExtensions', JSON '[]'));
+  IF $path = '/Schemas' THEN RETURN list_response(schemas, 1, 2); END IF;
+  IF $path = '/ResourceTypes' THEN RETURN list_response(resources, 1, 2); END IF;
+  IF STARTS_WITH($path, '/Schemas/') THEN
+    LET found = FILTER(schemas, item => JSON_STRING(item, 'id') = PERCENT_DECODE(SLICE_FROM($path, 9)));
+    REQUIRE LENGTH(found) = 1 ELSE 'notFound';
+    RETURN ONLY(found);
+  END IF;
+  IF STARTS_WITH($path, '/ResourceTypes/') THEN
+    LET found = FILTER(resources, item => JSON_STRING(item, 'id') = SLICE_FROM($path, 15));
+    REQUIRE LENGTH(found) = 1 ELSE 'notFound';
+    RETURN ONLY(found);
+  END IF;
+  FAIL 'notFound';
+END;
+
+CREATE FUNCTION list_response(resources LIST<JSON>, start BIGINT, total BIGINT) RETURNS JSON AS BEGIN
+  RETURN JSON_OBJECT('schemas', JSON_ARRAY_OF('urn:ietf:params:scim:api:messages:2.0:ListResponse'),
+    'totalResults', $total, 'startIndex', $start, 'itemsPerPage', LENGTH($resources),
+    'Resources', JSON_FROM_LIST($resources));
+END;
+
+
+CREATE FUNCTION render(kind TEXT, document JSON) RETURNS JSON AS BEGIN
+  LET located = JSON_SET_PATH($document, ['meta', 'location'],
+    JSON_FROM_TEXT($base_url || '/' || $kind || '/' || PERCENT_ENCODE(JSON_STRING($document, 'id'))));
+  IF $kind <> 'Groups' THEN RETURN located; END IF;
+  RETURN JSON_SET(located, 'members', JSON_FROM_LIST(MAP_LIST(
+    JSON_ARRAY_OR_DEFAULT(located, 'members', []), member => JSON_SET(member, '$ref',
+      JSON_FROM_TEXT($base_url || '/Users/' || PERCENT_ENCODE(JSON_STRING(member, 'value')))))));
+END;

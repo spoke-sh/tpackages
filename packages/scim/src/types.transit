@@ -1,0 +1,16 @@
+CREATE PUBLIC TYPE Response AS ROW(status BIGINT, headers MAP<TEXT, TEXT>, body OPTION<JSON>);
+CREATE PUBLIC TYPE Resource AS ROW(kind TEXT, id TEXT, version TEXT, document JSON);
+CREATE PUBLIC TYPE Change AS ROW(
+  event_id TEXT, owner OWNER, kind TEXT, id TEXT, version TEXT, action TEXT, observed_at TIMESTAMP
+);
+CREATE PUBLIC INTERFACE Store AS BEGIN
+  VIEW resources ROW(kind TEXT, id TEXT, version TEXT, document JSON);
+  STREAM changes ROW(event_id TEXT, owner OWNER, kind TEXT, id TEXT, version TEXT, action TEXT, observed_at TIMESTAMP);
+  PROCEDURE insert(kind TEXT, document JSON) WRITES STORAGE;
+  PROCEDURE replace(kind TEXT, id TEXT, expected_version TEXT, document JSON) WRITES STORAGE;
+  PROCEDURE remove(kind TEXT, id TEXT, expected_version TEXT) WRITES STORAGE;
+END;
+CREATE PUBLIC INTERFACE Policy AS BEGIN
+  GUARD allow(owner OWNER, kind TEXT, action TEXT, id OPTION<TEXT>) READS AUTHORITY;
+  FUNCTION can_read(owner OWNER, kind TEXT, id TEXT) RETURNS BOOLEAN READS AUTHORITY;
+END;

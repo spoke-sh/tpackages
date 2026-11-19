@@ -1,0 +1,20 @@
+DEPENDENCY oauth FROM WORKSPACE 'oauth';
+DEPENDENCY oidc FROM WORKSPACE 'oidc';
+DEPENDENCY webauthn FROM WORKSPACE 'webauthn';
+IMPORT oauth FROM PACKAGE oauth FILE 'build.transit';
+IMPORT oidc FROM PACKAGE oidc FILE 'build.transit';
+IMPORT webauthn FROM PACKAGE webauthn FILE 'build.transit';
+
+CREATE MODULE Validators() AS BEGIN
+  EXPORT FUNCTION oidc.validate_id_token AS validate_id_token;
+  EXPORT FUNCTION webauthn.decode_authenticator AS decode_authenticator;
+END;
+LET validators = USE Validators();
+EXPORT TARGET default AS SQL OF validators;
+CREATE PUBLIC TEST TARGET tests AS BEGIN
+  TEST 'pure validators select no state or transport definitions' AS BEGIN
+    ASSERT NO RESOURCES OF KINDS (TABLE, DOCUMENT, KV, STREAM, QUEUE, DATAFLOW, SOURCE, SINK, PUBLICATION) IN default;
+    ASSERT NO RUNTIME SETTINGS IN default;
+    ASSERT NO AUTHORIZATIONS IN default;
+  END;
+END;

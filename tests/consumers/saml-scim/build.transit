@@ -1,0 +1,82 @@
+DEPENDENCY package_0 FROM WORKSPACE 'saml';
+IMPORT package_0 FROM PACKAGE package_0 FILE 'build.transit';
+
+EXPORT MODULE Application0() AS BEGIN
+  LET api = USE package_0.ServiceProvider(SCHEMA_BINDING('consumer_saml_scim_0_saml'), ROW(
+    entity_id => 'https://app.example.test/saml', idp_entity_id => 'https://idp.example.test',
+    sso_endpoint => 'https://idp.example.test/sso', acs_url => 'https://app.example.test/saml/acs',
+    signing_secret => 'example.saml.signing', trusted_signing_keys => [PUBLIC_KEY_REF('example.saml.idp')],
+    request_seconds => 300, clock_skew_seconds => 30, max_assertion_seconds => 600
+  ));
+  BIND SCHEMA proof TO SCHEMA_BINDING('consumer_saml_scim_authentication');
+  CREATE PRIVATE TABLE proof.identities (
+    owner OWNER PRIMARY KEY, issuer TEXT, subject TEXT, expires_at TIMESTAMP
+  );
+  CREATE DATAFLOW proof.remember FROM STREAM api.completions AS event
+    WITH (consumer = 'application.authentication', required = TRUE, checkpoint = 'terminal_atomic') AS BEGIN ATOMIC
+    -- Application evidence only: this does not create a SCIM User or a session.
+    UPSERT INTO proof.identities VALUES (event.owner, event.identity.issuer,
+      event.identity.subject, event.identity.expires_at);
+  END;
+  CREATE VIEW proof.current AS SELECT * FROM proof.identities
+    WHERE owner = CURRENT_OWNER() AND expires_at > NOW();
+  EXPORT VIEW proof.current AS authenticated;
+  AUTHORIZE MODULE api WITH (
+    commands = ROLE SETTING('example.command_role'), state = ROLE SETTING('example.state_role'),
+    reads = ROLE SETTING('example.read_role'), maintenance = ROLE SETTING('example.maintenance_role')
+  );
+  AUTHORIZE DATAFLOW proof.remember AS ROLE SETTING('example.consumer_role');
+  ACTIVATE MODULE api;
+  ACTIVATE DATAFLOW proof.remember;
+  EXPORT MODULE api AS api;
+END;
+
+DEPENDENCY package_1 FROM WORKSPACE 'scim';
+IMPORT package_1 FROM PACKAGE package_1 FILE 'build.transit';
+
+CREATE INTERFACE Authentication AS BEGIN
+  VIEW authenticated ROW(owner OWNER, issuer TEXT, subject TEXT, expires_at TIMESTAMP);
+END;
+
+-- The application explicitly maps an authenticated subject to provisioning
+-- authority. SAML itself confers no SCIM right and creates no identity records.
+CREATE MODULE ExamplePolicy1(authentication MODULE Authentication) AS BEGIN
+  CREATE PUBLIC FUNCTION can_read(owner OWNER, kind TEXT, id TEXT) RETURNS BOOLEAN
+    READS ($authentication.authenticated) AS BEGIN
+    RETURN $owner = OWNER('example-provisioner') AND EXISTS (
+      SELECT owner FROM $authentication.authenticated WHERE owner = $owner
+        AND issuer = 'https://idp.example.test' AND subject = 'provisioner-subject'
+        AND expires_at > NOW());
+  END;
+  CREATE PUBLIC GUARD allow(owner OWNER, kind TEXT, action TEXT, id OPTION<TEXT>)
+    READS ($authentication.authenticated) AS BEGIN
+    REQUIRE can_read($owner, $kind, COALESCE($id, '')) ELSE 'forbidden';
+  END;
+END;
+
+EXPORT MODULE Application1(authentication MODULE Authentication) AS BEGIN
+  LET store = USE package_1.DocumentStore(SCHEMA_BINDING('consumer_saml_scim_1_scim_store'));
+  LET policy = USE ExamplePolicy1($authentication);
+  LET api = USE package_1.ServiceProvider(SCHEMA_BINDING('consumer_saml_scim_1_scim'), store, policy, 'https://app.example.test/scim/v2');
+  AUTHORIZE MODULE api WITH (
+    commands = ROLE SETTING('example.command_role'), state = ROLE SETTING('example.state_role'),
+    reads = ROLE SETTING('example.read_role')
+  );
+  ACTIVATE MODULE api;
+  EXPORT MODULE api AS api;
+END;
+
+EXPORT MODULE Consumer() AS BEGIN
+  LET instance_0 = USE Application0();
+  EXPORT MODULE instance_0 AS instance_0;
+  LET instance_1 = USE Application1(instance_0);
+  EXPORT MODULE instance_1 AS instance_1;
+END;
+LET consumer = USE Consumer();
+EXPORT TARGET default AS SQL OF consumer;
+CREATE PUBLIC TEST TARGET tests AS BEGIN
+  TEST 'selected package closure contains no unrelated packages' AS BEGIN
+    ASSERT DEPENDENCIES default EQUAL SET('saml', 'scim');
+    ASSERT NO OUTPUT FROM PACKAGES EXCEPT SET('saml', 'scim');
+  END;
+END;

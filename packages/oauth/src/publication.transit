@@ -1,0 +1,8 @@
+IMPORT core FROM './client.transit';
+CREATE PUBLIC MODULE Publication(binding SCHEMA_BINDING, api MODULE OF core.Client, path TEXT) AS BEGIN
+  BIND SCHEMA reads TO $binding;
+  CREATE PUBLICATION reads.results AS SELECT * FROM $api.status
+    WITH (snapshot_path = $path, authentication = 'native', disclosure = 'current_authority',
+      response_cache = 'no-store', page_size = 64);
+  EXPORT PUBLICATION reads.results AS results;
+END;

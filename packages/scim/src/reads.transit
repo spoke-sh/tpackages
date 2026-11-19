@@ -1,0 +1,39 @@
+CREATE VIEW scim.resources AS
+  SELECT kind, id, version, render(kind, document) AS document FROM $store.resources
+  WHERE $policy.can_read(CURRENT_OWNER(), kind, id);
+
+CREATE DATAFLOW scim.discover FROM COMMAND (path TEXT) AS request AS BEGIN ATOMIC
+  REQUIRE LENGTH(request.path) <= 2048 ELSE 'invalidSyntax';
+  REQUIRE $policy.allow(CURRENT_OWNER(), 'Discovery', 'read', NONE);
+  RETURN response(200, SOME(discovery(request.path)), MAP());
+END;
+
+CREATE DATAFLOW scim.list_resources FROM COMMAND (
+  kind TEXT, expression OPTION<TEXT>, start_index BIGINT, count BIGINT
+) AS request AS BEGIN ATOMIC
+  REQUIRE scim.require_action(request.kind, 'GET', NONE);
+  LET predicate = OPTION_MAP(request.expression, expression => filter.parse_filter(expression));
+  LET start = MAX(1, request.start_index);
+  LET count = MIN(1000, MAX(0, request.count));
+  -- The predicate runs inside the typed query. Only the selected page is
+  -- materialized; count and page share this native transaction's snapshot.
+  LET total = (SELECT COUNT(*) FROM scim.resources r WHERE r.kind = request.kind
+    AND OPTION_ALL(predicate, expression => filter.matches(expression, r.document)));
+  LET page = SELECT MANY document FROM scim.resources r WHERE r.kind = request.kind
+    AND OPTION_ALL(predicate, expression => filter.matches(expression, r.document))
+    ORDER BY id OFFSET start - 1 LIMIT count;
+  RETURN response(200, SOME(list_response(MAP_LIST(page, row => row.document), start, total)), MAP());
+END;
+
+CREATE DATAFLOW scim.get_resource FROM COMMAND (
+  kind TEXT, id TEXT, if_match OPTION<TEXT>, if_none_match OPTION<TEXT>
+) AS request AS BEGIN ATOMIC
+  REQUIRE scim.require_action(request.kind, 'GET', SOME(request.id));
+  LET current = MATCH (SELECT OPTIONAL * FROM scim.resources WHERE kind = request.kind AND id = request.id)
+    WHEN SOME(value) THEN value ELSE FAIL 'notFound' END;
+  REQUIRE scim.require_version(current.version, request.if_match);
+  IF OPTION_ANY(request.if_none_match, value => value = '*' OR value = current.version) THEN
+    RETURN response(304, NONE, MAP('ETag' => current.version));
+  END IF;
+  RETURN response(200, SOME(current.document), MAP('ETag' => current.version));
+END;

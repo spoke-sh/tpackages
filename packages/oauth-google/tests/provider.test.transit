@@ -1,0 +1,20 @@
+IMPORT library FROM '../build.transit';
+
+TEST 'google declares its wire profile' AS BEGIN
+  LET provider = USE library.Provider();
+  LET metadata = provider.metadata();
+  ASSERT metadata.issuer = 'https://accounts.google.com';
+  ASSERT metadata.pkce_s256 = TRUE;
+  ASSERT metadata.refresh = TRUE;
+  ASSERT metadata.token_method = 'POST';
+  ASSERT metadata.scope_separator = ' ';
+END;
+
+TEST 'google validates token responses and granted scopes' AS BEGIN
+  LET provider = USE library.Provider();
+  LET grant = provider.normalize(TEST SECRET JSON '{"access_token":"test-token","token_type":"bearer","scope":"read","expires_in":3600}', SET('read'));
+  ASSERT grant.scopes = SET('read');
+  ASSERT grant.expires_in = SOME(3600);
+  ASSERT provider.normalize(TEST SECRET JSON '{"error":"access_denied"}', SET('read')) FAILS WITH 'ProviderRejected';
+  ASSERT provider.normalize(TEST SECRET JSON '{"access_token":"test-token","token_type":"bearer","scope":"admin"}', SET('read')) FAILS WITH 'UnexpectedScope';
+END;

@@ -1,0 +1,45 @@
+IMPORT library FROM '../build.transit';
+
+EXPORT MODULE Application() AS BEGIN
+  LET api = USE library.ServiceProvider(SCHEMA_BINDING('example_saml'), ROW(
+    entity_id => 'https://app.example.test/saml', idp_entity_id => 'https://idp.example.test',
+    sso_endpoint => 'https://idp.example.test/sso', acs_url => 'https://app.example.test/saml/acs',
+    signing_secret => 'example.saml.signing', trusted_signing_keys => [PUBLIC_KEY_REF('example.saml.idp')],
+    request_seconds => 300, clock_skew_seconds => 30, max_assertion_seconds => 600
+  ));
+  BIND SCHEMA consumer TO SCHEMA_BINDING('example_saml_consumer');
+  CREATE PRIVATE TABLE consumer.results (id TEXT PRIMARY KEY, owner OWNER, issuer TEXT, subject TEXT);
+  CREATE DATAFLOW consumer.observe FROM STREAM api.completions AS event
+    WITH (consumer = 'example.results', required = TRUE, checkpoint = 'terminal_atomic') AS BEGIN ATOMIC
+    LET identity = event.identity;
+    INSERT INTO consumer.results VALUES (CAST(event.event_id AS TEXT), event.owner, identity.issuer, identity.subject)
+      ON CONFLICT (id) DO ASSERT SAME ROW;
+  END;
+  CREATE VIEW consumer.observed AS SELECT * FROM consumer.results WHERE owner = CURRENT_OWNER();
+  EXPORT VIEW consumer.observed AS observed;
+  AUTHORIZE MODULE api WITH (
+    commands = ROLE SETTING('example.command_role'), state = ROLE SETTING('example.state_role'),
+    effects = ROLE SETTING('example.effect_role'), reads = ROLE SETTING('example.read_role'),
+    maintenance = ROLE SETTING('example.maintenance_role')
+  );
+  AUTHORIZE DATAFLOW consumer.observe AS ROLE SETTING('example.consumer_role');
+  ACTIVATE MODULE api;
+  ACTIVATE DATAFLOW consumer.observe;
+  EXPORT MODULE api AS api;
+END;
+LET application = USE Application();
+EXPORT TARGET default AS SQL OF application;
+
+-- Select this target only when the application wants native HTTP routes.
+EXPORT MODULE HttpApplication() AS BEGIN
+  LET core = USE Application();
+  LET http = USE library.Http(SCHEMA_BINDING('example_saml_http'), core.api,
+    'https://app.example.test', '/login/saml', '/saml/acs');
+  AUTHORIZE MODULE http WITH (sources = ROLE SETTING('example.http_role'));
+  ACTIVATE MODULE http;
+  EXPORT MODULE core.api AS api;
+  EXPORT VIEW core.observed AS observed;
+  EXPORT MODULE http AS http;
+END;
+LET browser = USE HttpApplication();
+EXPORT TARGET http AS SQL OF browser;

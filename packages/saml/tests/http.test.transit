@@ -1,0 +1,33 @@
+IMPORT fixtures FROM './fixtures.transit';
+
+TEST 'POST assertion binding rejects duplicate fields without consuming the request'
+  USING MODULES (app) AS BEGIN
+  ACTIVATE TEST MODULE app;
+  SET TEST CLOCK '2026-01-01T00:00:00Z';
+  SET TEST KEY 'idp' ALGORITHM 'RSA-2048';
+  SET TEST PUBLIC KEY 'example.saml.idp' TO TEST_PUBLIC_KEY('idp');
+  SET TEST KEY 'sp' ALGORITHM 'RSA-2048';
+  SET TEST SECRET 'example.saml.signing' TO TEST_PRIVATE_KEY('sp');
+  LET begun = SIMULATE HTTP SOURCE app.http.begin(ROW(method => 'POST',
+    headers => MAP('Origin' => 'https://app.example.test'), raw_body => NONE));
+  ASSERT begun.status = 303;
+  ASSERT HTTP COOKIE begun '__Host-tpackages_saml' HAS ATTRIBUTES
+    (secure = TRUE, http_only = TRUE, same_site = 'None', path = '/');
+  LET location = begun.headers['Location'];
+  LET cookie = TEST RESPONSE COOKIE begun '__Host-tpackages_saml';
+  LET response = fixtures.response(fixtures.request_id(location), 'https://app.example.test/saml',
+    'https://app.example.test/saml/acs', 'http-assertion');
+  LET form = 'RelayState=' || PERCENT_ENCODE(URL_QUERY_UNIQUE(location)['RelayState'])
+    || '&SAMLResponse=' || PERCENT_ENCODE(response);
+  LET headers = MAP('Content-Type' => 'application/x-www-form-urlencoded', 'Cookie' => cookie);
+  LET duplicate = SIMULATE HTTP SOURCE app.http.assertion(ROW(method => 'POST', headers => headers,
+    raw_body => SOME(form || '&SAMLResponse=duplicate')));
+  ASSERT duplicate.status = 400;
+  ASSERT (SELECT COUNT(*) FROM TEST STREAM app.api.completions) = 0;
+  LET accepted = SIMULATE HTTP SOURCE app.http.assertion(ROW(method => 'POST', headers => headers,
+    raw_body => SOME(form)));
+  ASSERT accepted.status = 200;
+  DRAIN MODULE app WITHIN 100 STEPS;
+  ASSERT (SELECT COUNT(*) FROM app.observed) = 1;
+  ASSERT NO SECRET IN LOGS;
+END;

@@ -1,0 +1,59 @@
+IMPORT schema FROM './schema.transit';
+
+CREATE FUNCTION apply(document JSON, operation TEXT, path TEXT, value OPTION<JSON>) RETURNS JSON AS BEGIN
+  -- The supported valuePath is the common group membership selector; general
+  -- valuePath filtering is deliberately refused in this initial bounded profile.
+  IF STARTS_WITH(LOWER($path), 'members[') THEN
+    LET selector = REGEX_CAPTURES($path, '^members\[value eq ("([^"\\]|\\.)*")\]$', case_insensitive => TRUE);
+    REQUIRE IS_PRESENT(selector) ELSE 'invalidPath';
+    LET id = JSON_AS_TEXT(JSON_PARSE(REQUIRE_SOME(selector)[1], max_bytes => 1024, max_depth => 1));
+    LET members = JSON_ARRAY_OR_DEFAULT($document, 'members', []);
+    LET selected = FILTER(members, member => JSON_STRING(member, 'value') = id);
+    REQUIRE LENGTH(selected) > 0 ELSE 'noTarget';
+    LET remaining = FILTER(members, member => JSON_STRING(member, 'value') <> id);
+    IF $operation = 'remove' THEN RETURN JSON_SET($document, 'members', JSON_FROM_LIST(remaining)); END IF;
+    REQUIRE $operation = 'replace' ELSE 'invalidPath';
+    LET replacement = REQUIRE_SOME($value);
+    LET additions = CASE WHEN JSON_KIND(replacement) = 'array' THEN JSON_AS_ARRAY(replacement) ELSE [replacement] END;
+    RETURN JSON_SET($document, 'members', JSON_FROM_LIST(CONCAT_LISTS(remaining, additions)));
+  END IF;
+  LET path = schema.canonical_path($path);
+  REQUIRE NOT CONTAINS(SET('id', 'meta.resourceType', 'meta.created', 'meta.lastModified', 'meta.version'), path)
+    ELSE 'mutability';
+  REQUIRE NOT CONTAINS(SET('emails.value', 'emails.type', 'members.value'), path) ELSE 'invalidPath';
+  LET segments = SPLIT(path, '.');
+  IF $operation = 'remove' THEN
+    REQUIRE JSON_PATH_EXISTS($document, segments) ELSE 'noTarget';
+    RETURN JSON_REMOVE_PATH($document, segments);
+  END IF;
+  LET value = REQUIRE_SOME($value);
+  IF $operation = 'add' AND CONTAINS(SET('emails', 'members'), path) THEN
+    REQUIRE JSON_KIND(value) = 'array' ELSE 'invalidValue';
+    RETURN JSON_SET($document, path, JSON_FROM_LIST(UNIQUE(CONCAT_LISTS(
+      JSON_ARRAY_OR_DEFAULT($document, path, []), JSON_AS_ARRAY(value)))));
+  END IF;
+  RETURN JSON_SET_PATH($document, segments, value);
+END;
+
+CREATE PUBLIC FUNCTION patch(kind TEXT, current JSON, body JSON) RETURNS JSON AS BEGIN
+  REQUIRE JSON_ARRAY($body, 'schemas', 1) = ['urn:ietf:params:scim:api:messages:2.0:PatchOp'] ELSE 'invalidSyntax';
+  LET operations = JSON_ARRAY($body, 'Operations', 32);
+  REQUIRE LENGTH(operations) > 0 ELSE 'invalidSyntax';
+  VAR result = $current;
+  FOR operation IN operations DO
+    LET verb = LOWER(JSON_STRING(operation, 'op'));
+    REQUIRE CONTAINS(SET('add', 'remove', 'replace'), verb) ELSE 'invalidSyntax';
+    LET path = JSON_OPTION_STRING(operation, 'path');
+    LET value = JSON_OPTION(operation, 'value');
+    REQUIRE verb = 'remove' OR IS_PRESENT(value) ELSE 'invalidValue';
+    IF IS_PRESENT(path) THEN
+      SET result = apply(result, verb, REQUIRE_SOME(path), value);
+    ELSE
+      REQUIRE verb <> 'remove' AND JSON_KIND(REQUIRE_SOME(value)) = 'object' ELSE 'invalidPath';
+      FOR field IN JSON_KEYS(REQUIRE_SOME(value)) DO
+        SET result = apply(result, verb, field, SOME(JSON_GET(REQUIRE_SOME(value), field)));
+      END FOR;
+    END IF;
+  END FOR;
+  RETURN schema.validate($kind, result);
+END;

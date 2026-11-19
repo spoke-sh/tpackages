@@ -1,0 +1,8 @@
+-- Deliberately outside the pinned parser; selecting production must not load it.
+CREATE PUBLIC TYPE FutureTestValue AS ROW(secret SECRET<TEXT>);
+CREATE PUBLIC TEST TARGET tests AS BEGIN
+  TEST 'future test controls' AS BEGIN
+    SET TEST CLOCK '2026-01-01T00:00:00Z';
+    ASSERT TRUE;
+  END;
+END;

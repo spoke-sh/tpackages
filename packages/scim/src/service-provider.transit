@@ -1,0 +1,25 @@
+IMPORT types FROM './types.transit';
+IMPORT schema FROM './schema.transit';
+IMPORT filter FROM './filter.transit';
+IMPORT patch FROM './patch.transit';
+
+CREATE PUBLIC MODULE ServiceProvider(
+  binding SCHEMA_BINDING, store MODULE types.Store, policy MODULE types.Policy, base_url TEXT
+) AS BEGIN
+  BIND SCHEMA scim TO $binding;
+  REQUIRE HTTPS_URL($base_url, SET(URL_HOST($base_url))) AND NOT ENDS_WITH($base_url, '/')
+    AND URL_QUERY($base_url) = '' ELSE 'InvalidBaseURL';
+  DECLARE FROM './wire.transit';
+  DECLARE FROM './guards.transit';
+  DECLARE FROM './reads.transit';
+  DECLARE FROM './provisioning.transit';
+  EXPORT DATAFLOW scim.discover AS discover;
+  EXPORT DATAFLOW scim.list_resources AS list_resources;
+  EXPORT DATAFLOW scim.get_resource AS get_resource;
+  EXPORT DATAFLOW scim.create_resource AS create_resource;
+  EXPORT DATAFLOW scim.replace_resource AS replace_resource;
+  EXPORT DATAFLOW scim.patch_resource AS patch_resource;
+  EXPORT DATAFLOW scim.delete_resource AS delete_resource;
+  EXPORT VIEW scim.resources AS resources;
+  EXPORT STREAM $store.changes AS changes;
+END;

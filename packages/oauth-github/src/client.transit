@@ -1,0 +1,20 @@
+IMPORT oauth FROM PACKAGE oauth FILE 'build.transit';
+IMPORT profile FROM './provider.transit';
+
+CREATE PUBLIC MODULE Client(binding SCHEMA_BINDING, config oauth.Configuration) AS BEGIN
+  LET provider = USE profile.Provider();
+  LET implementation = USE oauth.Client($binding, provider, $config);
+  EXPORT DATAFLOW implementation.begin_authorization AS begin_authorization;
+  EXPORT DATAFLOW implementation.accept_callback AS accept_callback;
+  EXPORT DATAFLOW implementation.refresh AS refresh;
+  EXPORT DATAFLOW implementation.revoke AS revoke;
+  EXPORT DATAFLOW implementation.set_enabled AS set_enabled;
+  EXPORT VIEW implementation.policy_status AS policy_status;
+  EXPORT STREAM implementation.completions AS completions;
+  EXPORT VIEW implementation.status AS status;
+  EXPORT VIEW implementation.credential_metadata AS credential_metadata;
+  EXPORT FUNCTION implementation.outcome AS outcome;
+  EXPORT FUNCTION implementation.credential AS credential;
+  EXPORT FUNCTION implementation.token_material AS token_material;
+  EXPORT SINK implementation.token AS token;
+END;

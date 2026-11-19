@@ -1,0 +1,121 @@
+CREATE DATAFLOW webauthn.begin_registration FROM COMMAND (
+  browser SECRET<TEXT>, user_handle BYTES, user_name TEXT, display_name TEXT
+) AS request WITH (idempotency = 'original_owner_request') AS BEGIN ATOMIC
+  LET policy_doc = SELECT ONE * FROM webauthn.policy WHERE id = 'rp';
+  REQUIRE policy_doc.enabled ELSE 'PolicyDisabled';
+  REQUIRE $policy.allow_registration(CURRENT_OWNER(), request.user_handle);
+  REQUIRE LENGTH(request.browser) >= 32 AND LENGTH(request.user_handle) >= 1 AND LENGTH(request.user_handle) <= 64
+    AND LENGTH(request.user_name) > 0 AND LENGTH(request.user_name) <= 256
+    AND LENGTH(request.display_name) > 0 AND LENGTH(request.display_name) <= 256 ELSE 'InvalidRegistration';
+  LET id = NEW_ID();
+  LET challenge = RANDOM_BYTES(32);
+  LET excluded = SELECT MANY id FROM webauthn.credentials WHERE user_handle = request.user_handle LIMIT 101;
+  REQUIRE LENGTH(excluded) < 100 ELSE 'CredentialLimit';
+  LET expires = NOW() + SECONDS($config.challenge_seconds);
+  PUT INTO webauthn.challenges KEY id VALUE ROW(owner => CURRENT_OWNER(),
+    browser_hash => COMMITMENT(request.browser), challenge => challenge, ceremony => 'registration',
+    user_handle => SOME(request.user_handle), expires_at => expires, consumed => FALSE,
+    policy_revision => policy_doc._revision) IF ABSENT;
+  INSERT INTO webauthn.expiry VALUES (id, expires);
+  RETURN ROW(id => id, public_key => JSON_OBJECT(
+    'challenge', BASE64URL(challenge), 'rp', JSON_OBJECT('id', $config.rp_id, 'name', $config.rp_name),
+    'user', JSON_OBJECT('id', BASE64URL(request.user_handle), 'name', request.user_name, 'displayName', request.display_name),
+    'pubKeyCredParams', JSON_ARRAY_OF(JSON_OBJECT('type', 'public-key', 'alg', -7)),
+    'timeout', $config.challenge_seconds * 1000, 'attestation', 'none',
+    'authenticatorSelection', JSON_OBJECT('residentKey', 'preferred',
+      'userVerification', CASE WHEN policy_doc.require_user_verification THEN 'required' ELSE 'preferred' END),
+    'excludeCredentials', JSON_FROM_LIST(MAP_LIST(excluded, row => JSON_OBJECT('type', 'public-key', 'id', BASE64URL(row.id))))));
+END;
+
+CREATE DATAFLOW webauthn.accept_registration FROM COMMAND (
+  id TEXT, browser SECRET<TEXT>, raw_id BYTES, client_data_json BYTES, attestation_object BYTES
+) AS request WITH (idempotency = 'original_owner_request') AS BEGIN ATOMIC
+  LET policy_doc = SELECT ONE * FROM webauthn.policy WHERE id = 'rp';
+  REQUIRE policy_doc.enabled ELSE 'PolicyDisabled';
+  LET observed = MATCH (GET FROM webauthn.challenges KEY request.id)
+    WHEN SOME(value) THEN value ELSE FAIL 'InvalidChallenge' END;
+  LET pending = observed.value;
+  REQUIRE webauthn.require_challenge(pending, request.browser, 'registration');
+  LET account_handle = REQUIRE_SOME(pending.user_handle);
+  REQUIRE $policy.allow_registration(CURRENT_OWNER(), account_handle);
+  LET client_hash = verification.client_data(request.client_data_json, pending.challenge, 'webauthn.create', $config.origins);
+  LET attestation = CBOR_DECODE(request.attestation_object, max_bytes => 32768, max_depth => 8, duplicate_keys => 'reject');
+  REQUIRE CBOR_TEXT(attestation, 'fmt') = 'none' AND CBOR_MAP_SIZE(CBOR_GET(attestation, 'attStmt')) = 0
+    ELSE 'AttestationUnsupported';
+  LET authenticator = verification.decode_authenticator(CBOR_BYTES(attestation, 'authData'), TRUE,
+    $config.rp_id, policy_doc.require_user_verification);
+  REQUIRE SECURE_EQUAL(request.raw_id, REQUIRE_SOME(authenticator.credential_id)) ELSE 'CredentialIdMismatch';
+  REQUIRE NOT EXISTS (SELECT id FROM webauthn.credentials WHERE id = request.raw_id) ELSE 'CredentialAlreadyRegistered';
+  REQUIRE (SELECT COUNT(*) FROM webauthn.credentials WHERE user_handle = account_handle) < 100
+    ELSE 'CredentialLimit';
+  LET credential = ROW(id => request.raw_id, user_handle => account_handle,
+    public_key => REQUIRE_SOME(authenticator.public_key), sign_count => authenticator.sign_count,
+    backup_eligible => authenticator.backup_eligible, backed_up => authenticator.backed_up);
+  INSERT INTO webauthn.credentials FROM credential;
+  PUT INTO webauthn.challenges KEY request.id VALUE pending WITH (consumed = TRUE)
+    IF REVISION = observed.revision;
+  PRODUCE INTO webauthn.completions VALUES (OPERATION_ID(CURRENT_REQUEST_ID(), 'registration'),
+    CURRENT_OWNER(), 'registration', request.raw_id, account_handle, FALSE, NOW());
+  RETURN credential;
+END;
+
+CREATE DATAFLOW webauthn.begin_authentication FROM COMMAND (
+  browser SECRET<TEXT>, expected_user OPTION<BYTES>
+) AS request WITH (idempotency = 'original_owner_request') AS BEGIN ATOMIC
+  LET policy_doc = SELECT ONE * FROM webauthn.policy WHERE id = 'rp';
+  REQUIRE policy_doc.enabled ELSE 'PolicyDisabled';
+  REQUIRE $policy.allow_authentication(CURRENT_OWNER(), request.expected_user);
+  REQUIRE LENGTH(request.browser) >= 32 AND OPTION_ALL(request.expected_user, value => LENGTH(value) > 0 AND LENGTH(value) <= 64)
+    ELSE 'InvalidAuthentication';
+  LET id = NEW_ID();
+  LET challenge = RANDOM_BYTES(32);
+  LET allowed = SELECT MANY id FROM webauthn.credentials
+    WHERE SOME(user_handle) = request.expected_user LIMIT 101;
+  REQUIRE LENGTH(allowed) <= 100 ELSE 'CredentialLimit';
+  REQUIRE NOT IS_PRESENT(request.expected_user) OR LENGTH(allowed) > 0 ELSE 'NoCredentials';
+  LET expires = NOW() + SECONDS($config.challenge_seconds);
+  PUT INTO webauthn.challenges KEY id VALUE ROW(owner => CURRENT_OWNER(),
+    browser_hash => COMMITMENT(request.browser), challenge => challenge, ceremony => 'authentication',
+    user_handle => request.expected_user, expires_at => expires, consumed => FALSE,
+    policy_revision => policy_doc._revision) IF ABSENT;
+  INSERT INTO webauthn.expiry VALUES (id, expires);
+  RETURN ROW(id => id, public_key => JSON_OBJECT(
+    'challenge', BASE64URL(challenge), 'rpId', $config.rp_id,
+    'timeout', $config.challenge_seconds * 1000,
+    'userVerification', CASE WHEN policy_doc.require_user_verification THEN 'required' ELSE 'preferred' END,
+    'allowCredentials', JSON_FROM_LIST(MAP_LIST(allowed, row => JSON_OBJECT('type', 'public-key', 'id', BASE64URL(row.id))))));
+END;
+
+CREATE DATAFLOW webauthn.accept_authentication FROM COMMAND (
+  id TEXT, browser SECRET<TEXT>, raw_id BYTES, user_handle OPTION<BYTES>,
+  client_data_json BYTES, authenticator_data BYTES, signature BYTES
+) AS request WITH (idempotency = 'original_owner_request') AS BEGIN ATOMIC
+  LET policy_doc = SELECT ONE * FROM webauthn.policy WHERE id = 'rp';
+  REQUIRE policy_doc.enabled ELSE 'PolicyDisabled';
+  LET observed = MATCH (GET FROM webauthn.challenges KEY request.id)
+    WHEN SOME(value) THEN value ELSE FAIL 'InvalidChallenge' END;
+  LET pending = observed.value;
+  REQUIRE webauthn.require_challenge(pending, request.browser, 'authentication');
+  REQUIRE $policy.allow_authentication(CURRENT_OWNER(), pending.user_handle);
+  LET credential = SELECT ONE * FROM webauthn.credentials WHERE id = request.raw_id;
+  REQUIRE OPTION_ALL(pending.user_handle, value => SECURE_EQUAL(value, credential.user_handle))
+    AND OPTION_ALL(request.user_handle, value => SECURE_EQUAL(value, credential.user_handle))
+    AND (IS_PRESENT(pending.user_handle) OR IS_PRESENT(request.user_handle)) ELSE 'UserHandleMismatch';
+  LET client_hash = verification.client_data(request.client_data_json, pending.challenge, 'webauthn.get', $config.origins);
+  LET authenticator = verification.decode_authenticator(request.authenticator_data, FALSE,
+    $config.rp_id, policy_doc.require_user_verification);
+  REQUIRE authenticator.backup_eligible = credential.backup_eligible ELSE 'BackupEligibilityChanged';
+  REQUIRE LENGTH(request.signature) <= 80 AND CRYPTO_VERIFY('ES256-DER', credential.public_key,
+    CONCAT_BYTES(request.authenticator_data, client_hash), request.signature) ELSE 'InvalidSignature';
+  LET counter_warning = (credential.sign_count > 0 OR authenticator.sign_count > 0)
+    AND authenticator.sign_count <= credential.sign_count;
+  REQUIRE NOT policy_doc.reject_counter_regression OR NOT counter_warning ELSE 'CounterRegression';
+  UPDATE webauthn.credentials SET sign_count = MAX(credential.sign_count, authenticator.sign_count),
+    backed_up = authenticator.backed_up WHERE id = request.raw_id;
+  PUT INTO webauthn.challenges KEY request.id VALUE pending WITH (consumed = TRUE)
+    IF REVISION = observed.revision;
+  PRODUCE INTO webauthn.completions VALUES (OPERATION_ID(CURRENT_REQUEST_ID(), 'authentication'),
+    CURRENT_OWNER(), 'authentication', request.raw_id, credential.user_handle, counter_warning, NOW());
+  RETURN ROW(user_handle => credential.user_handle, credential_id => request.raw_id,
+    counter_warning => counter_warning, backed_up => authenticator.backed_up);
+END;

@@ -1,0 +1,55 @@
+IMPORT types FROM './types.transit';
+IMPORT contracts FROM './provider.transit';
+
+CREATE PUBLIC MODULE Client(
+  binding SCHEMA_BINDING, provider MODULE contracts.Provider, config types.Configuration
+) AS BEGIN
+  BIND SCHEMA oauth TO $binding;
+  LET metadata = $provider.metadata();
+  REQUIRE metadata.pkce_s256 ELSE 'PKCERequired';
+  REQUIRE $config.challenge_seconds > 0 AND $config.challenge_seconds <= 600
+    AND $config.credential_seconds > 0 AND $config.credential_seconds <= 31536000
+    ELSE 'InvalidLifetime';
+  REQUIRE LENGTH($config.client_id) > 0 AND LENGTH($config.client_secret) > 0
+    ELSE 'ConfidentialClientRequired';
+  REQUIRE LENGTH($config.scopes) > 0 AND LENGTH($config.scopes) <= 64
+    AND ALL($config.scopes, scope => LENGTH(scope) <= 256 AND MATCHES(scope, '^[A-Za-z0-9:/._-]+$'))
+    AND LENGTH($config.allowed_hosts) <= 16 AND MAP_SIZE($config.authorization_parameters) <= 16
+    ELSE 'InvalidConfiguration';
+  REQUIRE HTTPS_URL($config.redirect_uri, SET(URL_HOST($config.redirect_uri)))
+    AND HTTPS_URL(metadata.authorization_endpoint, $config.allowed_hosts)
+    AND HTTPS_URL(metadata.token_endpoint, $config.allowed_hosts)
+    AND OPTION_ALL(metadata.revocation_endpoint, url => HTTPS_URL(url, $config.allowed_hosts))
+    ELSE 'InvalidEndpoint';
+  REQUIRE IS_SUBSET(MAP_KEYS($config.authorization_parameters), metadata.authorization_parameter_names)
+    AND IS_DISJOINT(MAP_KEYS($config.authorization_parameters),
+      SET('client_id', 'redirect_uri', 'scope', 'state', 'response_type',
+          'code_challenge', 'code_challenge_method', 'nonce'))
+    ELSE 'ReservedAuthorizationParameter';
+
+  DECLARE FROM './state.transit';
+  DECLARE FROM './guards.transit';
+  DECLARE FROM './authorization.transit';
+  DECLARE FROM './credentials.transit';
+  DECLARE FROM './exchange.transit';
+  DECLARE FROM './reads.transit';
+  DECLARE FROM './maintenance.transit';
+
+  EXPORT DATAFLOW oauth.begin_authorization AS begin_authorization;
+  EXPORT DATAFLOW oauth.accept_callback AS accept_callback;
+  EXPORT DATAFLOW oauth.refresh AS refresh;
+  EXPORT DATAFLOW oauth.revoke AS revoke;
+  EXPORT DATAFLOW oauth.set_enabled AS set_enabled;
+  EXPORT PROCEDURE oauth.issue_challenge AS issue_challenge;
+  EXPORT FUNCTION oauth.outcome AS outcome;
+  EXPORT FUNCTION oauth.credential AS credential;
+  EXPORT FUNCTION oauth.token_material AS token_material;
+  EXPORT VIEW oauth.status AS status;
+  EXPORT VIEW oauth.credential_metadata AS credential_metadata;
+  EXPORT VIEW oauth.policy_status AS policy_status;
+  EXPORT STREAM oauth.completions AS completions;
+  EXPORT SINK oauth.token AS token;
+  IF IS_PRESENT(metadata.revocation_endpoint) THEN
+    EXPORT SINK oauth.revocation AS revocation;
+  END IF;
+END;

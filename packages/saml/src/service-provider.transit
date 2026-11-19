@@ -1,0 +1,27 @@
+IMPORT types FROM './types.transit';
+IMPORT validation FROM './validation.transit';
+
+CREATE PUBLIC MODULE ServiceProvider(binding SCHEMA_BINDING, config types.Configuration) AS BEGIN
+  BIND SCHEMA saml TO $binding;
+  REQUIRE $config.request_seconds > 0 AND $config.request_seconds <= 600
+    AND $config.clock_skew_seconds >= 0 AND $config.clock_skew_seconds <= 120
+    AND $config.max_assertion_seconds > 0 AND $config.max_assertion_seconds <= 3600
+    AND LENGTH($config.trusted_signing_keys) > 0 AND LENGTH($config.trusted_signing_keys) <= 8
+    ELSE 'InvalidConfiguration';
+  REQUIRE HTTPS_URL($config.acs_url, SET(URL_HOST($config.acs_url)))
+    AND HTTPS_URL($config.sso_endpoint, SET(URL_HOST($config.sso_endpoint)))
+    AND URL_QUERY($config.sso_endpoint) = '' ELSE 'InvalidEndpoint';
+  DECLARE FROM './state.transit';
+  DECLARE FROM './guards.transit';
+  DECLARE FROM './sso.transit';
+  DECLARE FROM './maintenance.transit';
+  CREATE FUNCTION saml.assertion_endpoint() RETURNS TEXT AS BEGIN
+    RETURN $config.acs_url;
+  END;
+  EXPORT FUNCTION saml.assertion_endpoint AS assertion_endpoint;
+  EXPORT DATAFLOW saml.begin_sso AS begin_sso;
+  EXPORT DATAFLOW saml.accept_assertion AS accept_assertion;
+  EXPORT DATAFLOW saml.configure_trust AS configure_trust;
+  EXPORT VIEW saml.policy_status AS policy_status;
+  EXPORT STREAM saml.completions AS completions;
+END;

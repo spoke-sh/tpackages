@@ -1,0 +1,8 @@
+CREATE TARGET default AS BEGIN
+  CREATE PUBLIC TABLE observed (id TEXT PRIMARY KEY);
+  CREATE PUBLIC STREAM events (id TEXT);
+  CREATE PUBLIC DATAFLOW consume FROM STREAM events AS event
+    WITH (consumer = 'results', required = TRUE, checkpoint = 'terminal_atomic') AS BEGIN ATOMIC
+    INSERT INTO observed VALUES (event.id) ON CONFLICT (id) DO ASSERT SAME ROW;
+  END;
+END;

@@ -1,0 +1,27 @@
+IMPORT types FROM './types.transit';
+IMPORT verification FROM './verification.transit';
+
+CREATE PUBLIC MODULE RelyingParty(
+  binding SCHEMA_BINDING, config types.Configuration, policy MODULE types.Policy
+) AS BEGIN
+  BIND SCHEMA webauthn TO $binding;
+  REQUIRE $config.challenge_seconds > 0 AND $config.challenge_seconds <= 600
+    AND LENGTH($config.origins) > 0 AND NOT IS_PUBLIC_SUFFIX($config.rp_id)
+    AND DNS_NAME_CANONICAL($config.rp_id) = $config.rp_id ELSE 'InvalidConfiguration';
+  FOR origin IN $config.origins DO
+    REQUIRE HTTPS_ORIGIN(origin) AND (URL_HOST(origin) = $config.rp_id
+      OR ENDS_WITH(URL_HOST(origin), '.' || $config.rp_id)) ELSE 'InvalidOrigin';
+  END FOR;
+  DECLARE FROM './state.transit';
+  DECLARE FROM './guards.transit';
+  DECLARE FROM './ceremonies.transit';
+  DECLARE FROM './maintenance.transit';
+  EXPORT DATAFLOW webauthn.begin_registration AS begin_registration;
+  EXPORT DATAFLOW webauthn.accept_registration AS accept_registration;
+  EXPORT DATAFLOW webauthn.begin_authentication AS begin_authentication;
+  EXPORT DATAFLOW webauthn.accept_authentication AS accept_authentication;
+  EXPORT DATAFLOW webauthn.configure_policy AS configure_policy;
+  EXPORT VIEW webauthn.policy_status AS policy_status;
+  EXPORT STREAM webauthn.completions AS completions;
+  EXPORT VIEW webauthn.credential_metadata AS credential_metadata;
+END;

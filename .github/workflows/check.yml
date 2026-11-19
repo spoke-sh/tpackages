@@ -1,0 +1,24 @@
+name: Check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  tooling-and-compiler-gaps:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v31
+      - run: nix flake check --no-update-lock-file --print-build-logs
+      - run: nix develop --command just check
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: compiler-gap-reports
+          path: .transit/reports/*.json
+          if-no-files-found: warn

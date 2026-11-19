@@ -1,0 +1,35 @@
+CREATE PUBLIC DOMAIN AuthorizationId AS TEXT;
+CREATE PUBLIC DOMAIN CredentialId AS TEXT;
+CREATE PUBLIC DOMAIN OperationId AS TEXT;
+
+CREATE PUBLIC TYPE Configuration AS ROW(
+  client_id TEXT, client_secret TEXT, redirect_uri TEXT,
+  scopes SET<TEXT>, challenge_seconds BIGINT, credential_seconds BIGINT,
+  allowed_hosts SET<TEXT>, authorization_parameters MAP<TEXT, TEXT>
+);
+
+CREATE PUBLIC TYPE ProviderMetadata AS ROW(
+  name TEXT, issuer TEXT, authorization_endpoint TEXT, token_endpoint TEXT,
+  revocation_endpoint OPTION<TEXT>, token_method TEXT, token_encoding TEXT,
+  client_auth TEXT, scope_separator TEXT, response_scope_separator TEXT,
+  pkce_s256 BOOLEAN, refresh BOOLEAN, issuer_parameter BOOLEAN,
+  authorization_parameter_names SET<TEXT>
+);
+
+CREATE PUBLIC VARIANT Outcome AS
+  Pending(operation OperationId)
+  | Granted(credential CredentialId)
+  | Revoked(credential CredentialId)
+  | Refused(reason TEXT)
+  | Unknown(operation OperationId);
+
+CREATE PUBLIC TYPE Grant AS ROW(
+  access SECRET<TEXT>, refresh OPTION<SECRET<TEXT>>, id_token OPTION<SECRET<TEXT>>,
+  scopes SET<TEXT>, expires_in OPTION<BIGINT>, refresh_expires_in OPTION<BIGINT>
+);
+
+CREATE PUBLIC TYPE Challenge AS ROW(
+  owner OWNER, browser_hash BYTES, verifier PROTECTED_REF, nonce OPTION<TEXT>,
+  expires_at TIMESTAMP, policy_revision REVISION, secret_revision BIGINT,
+  status TEXT, operation OPTION<OperationId>
+);

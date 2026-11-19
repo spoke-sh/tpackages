@@ -1,0 +1,20 @@
+CREATE PUBLIC FUNCTION response(request_id TEXT, audience TEXT, destination TEXT, assertion_id TEXT)
+  RETURNS SECRET<TEXT> TEST ONLY AS BEGIN
+  LET assertion = XML_PARSE_TEMPLATE(
+    '<saml:Assertion xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="{assertion_id}" Version="2.0" IssueInstant="2026-01-01T00:00:00Z"><saml:Issuer>https://idp.example.test</saml:Issuer><saml:Subject><saml:NameID>subject-1</saml:NameID><saml:SubjectConfirmation Method="urn:oasis:names:tc:SAML:2.0:cm:bearer"><saml:SubjectConfirmationData Recipient="{destination}" InResponseTo="{request_id}" NotOnOrAfter="2026-01-01T00:05:00Z"/></saml:SubjectConfirmation></saml:Subject><saml:Conditions NotBefore="2026-01-01T00:00:00Z" NotOnOrAfter="2026-01-01T00:05:00Z"><saml:AudienceRestriction><saml:Audience>{audience}</saml:Audience></saml:AudienceRestriction></saml:Conditions><saml:AuthnStatement AuthnInstant="2026-01-01T00:00:00Z" SessionIndex="session-1"/></saml:Assertion>',
+    MAP('assertion_id' => $assertion_id, 'destination' => $destination,
+      'request_id' => $request_id, 'audience' => $audience));
+  LET signed = XML_SIGN(assertion, TEST_PRIVATE_KEY('idp'), algorithm => 'rsa-sha256',
+    digest => 'sha256', transforms => ['enveloped-signature', 'exclusive-c14n']);
+  LET response = XML_PARSE_TEMPLATE(
+    '<p:Response xmlns:p="urn:oasis:names:tc:SAML:2.0:protocol" xmlns:s="urn:oasis:names:tc:SAML:2.0:assertion" ID="response-1" Version="2.0" Destination="{destination}" InResponseTo="{request_id}"><s:Issuer>https://idp.example.test</s:Issuer><p:Status><p:StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:Success"/></p:Status></p:Response>',
+    MAP('destination' => $destination, 'request_id' => $request_id));
+  RETURN TEST_PROTECT(BASE64(XML_SERIALIZE(XML_APPEND_CHILD(response, signed))));
+END;
+
+CREATE PUBLIC FUNCTION request_id(location TEXT) RETURNS TEXT AS BEGIN
+  LET query = URL_QUERY_UNIQUE($location);
+  LET doc = XML_PARSE(INFLATE_RAW(BASE64_DECODE(query['SAMLRequest']), max_bytes => 16384),
+    max_bytes => 16384, max_depth => 4, max_nodes => 32, dtd => FALSE, external_entities => FALSE);
+  RETURN XML_ATTRIBUTE(XML_ROOT(doc, '{urn:oasis:names:tc:SAML:2.0:protocol}AuthnRequest'), 'ID');
+END;

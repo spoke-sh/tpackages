@@ -1,0 +1,23 @@
+IMPORT rows FROM './rows.transit';
+
+CREATE PUBLIC TARGET default AS BEGIN
+  USE rows.Rows(NAME 'first');
+  USE rows.Rows(NAME 'second');
+END;
+
+CREATE PUBLIC TEST TARGET tests AS BEGIN
+  TEST 'module instances have independent state'
+    USING MODULES (rows.Rows(NAME 'first'), rows.Rows(NAME 'second')) AS BEGIN
+    ASSERT COMMAND (INSERT INTO first VALUES (7, 'initial')) MATCHED 1 CHANGED 1;
+    ASSERT ROWS (SELECT * FROM first) EQUAL ((7, 'initial'));
+    ASSERT ROWS (SELECT * FROM second) EQUAL ();
+  END;
+
+  TEST 'fresh state and duplicate refusal'
+    USING MODULES (rows.Rows(NAME 'first')) AS BEGIN
+    ASSERT ROWS (SELECT * FROM first) EQUAL ();
+    ASSERT COMMAND (INSERT INTO first VALUES (7, 'initial')) MATCHED 1 CHANGED 1;
+    ASSERT STATEMENT (INSERT INTO first VALUES (7, 'replacement')) FAILS WITH 'duplicate_key';
+    ASSERT ROWS (SELECT * FROM first) EQUAL ((7, 'initial'));
+  END;
+END;

@@ -1,0 +1,13 @@
+CREATE TARGET default AS BEGIN
+  CREATE PUBLIC TABLE outcomes (id TEXT PRIMARY KEY);
+  CREATE PUBLIC DOCUMENT policy (id TEXT PRIMARY KEY, enabled BOOLEAN) WITH (profile = 'versioned');
+  CREATE PUBLIC KV challenges (ROW(consumed BOOLEAN));
+  CREATE PUBLIC STREAM completions (id TEXT);
+  CREATE PUBLIC DATAFLOW accept FROM COMMAND (id TEXT) AS request AS BEGIN ATOMIC
+    REQUIRE (SELECT ONE enabled FROM policy WHERE id = 'policy').enabled ELSE 'Disabled';
+    LET challenge = REQUIRE_SOME(GET FROM challenges KEY request.id);
+    PUT INTO challenges KEY request.id VALUE ROW(consumed => TRUE) IF REVISION = challenge.revision;
+    INSERT INTO outcomes VALUES (request.id);
+    PRODUCE INTO completions VALUES (request.id);
+  END;
+END;

@@ -1,0 +1,30 @@
+CREATE PRIVATE DOCUMENT oidc.metadata (
+  id TEXT PRIMARY KEY, configuration JSON NOT NULL, keys JSON NOT NULL,
+  source_operation TEXT NOT NULL, expires_at TIMESTAMP NOT NULL
+) WITH (profile = 'versioned');
+CREATE PRIVATE TABLE oidc.discovery (
+  id TEXT PRIMARY KEY, owner OWNER NOT NULL, status TEXT NOT NULL
+);
+CREATE PRIVATE KV oidc.authorizations (ROW(
+  owner OWNER, nonce TEXT, expires_at TIMESTAMP
+));
+CREATE PRIVATE TABLE oidc.results (
+  id oauth.AuthorizationId PRIMARY KEY, owner OWNER NOT NULL, expires_at TIMESTAMP NOT NULL,
+  outcome types.Outcome NOT NULL
+);
+CREATE INDEX oidc.pending_due ON oidc.results (expires_at, id) WHERE outcome IS types.Outcome.Pending;
+CREATE PRIVATE QUEUE oidc.discovery_jobs (id TEXT, owner OWNER, basis OPTION<REVISION>);
+CREATE PRIVATE STREAM oidc.completions (
+  event_id oauth.AuthorizationId, owner OWNER, outcome types.Outcome, observed_at TIMESTAMP
+) WITH (retention = 'unlimited', partition_by = 'owner', disclosure = 'current_owner');
+CREATE SINK oidc.configuration INTO HTTP WITH (
+  endpoint = TRIM_END($config.issuer, '/') || '/.well-known/openid-configuration',
+  method = 'GET', response = 'bytes', response_max_bytes = 65536,
+  request_timeout = '10s', follow_redirects = FALSE, max_attempts = 1,
+  allowed_hosts = $config.oauth.allowed_hosts
+);
+CREATE SINK oidc.jwks INTO HTTP WITH (
+  endpoint = $config.jwks_uri, method = 'GET', response = 'bytes',
+  response_max_bytes = 65536, request_timeout = '10s', follow_redirects = FALSE,
+  max_attempts = 1, allowed_hosts = $config.oauth.allowed_hosts
+);

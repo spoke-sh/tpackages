@@ -1,0 +1,35 @@
+IMPORT core FROM './relying-party.transit';
+CREATE PUBLIC MODULE Http(binding SCHEMA_BINDING, api MODULE OF core.RelyingParty, origin TEXT, prefix TEXT) AS BEGIN
+  BIND SCHEMA transport TO $binding;
+  REQUIRE HTTPS_ORIGIN($origin) AND STARTS_WITH($prefix, '/') AND NOT ENDS_WITH($prefix, '/') ELSE 'InvalidRoutes';
+  CREATE SOURCE transport.begin_registration FROM HTTP REQUEST AS request INTO COMMAND $api.begin_registration(browser, HTTP_JSON_BYTES(request, 'user_handle'), HTTP_JSON_TEXT(request, 'user_name'), HTTP_JSON_TEXT(request, 'display_name'))
+    LET browser = COALESCE(HTTP_SECRET_COOKIE_UNIQUE(request, '__Host-tpackages_webauthn'), RANDOM_SECRET(32))
+    WITH (method = 'POST', path = $prefix || '/registration/options', origin = $origin, admission = 'same_origin',
+      authentication = 'application', content_type = 'application/json', max_body_bytes = 65536,
+      request_storage = 'protected_transient', capture = 'redacted_metadata', response_cache = 'no-store',
+      response_status = 200, response_body = RESULT,
+      response_cookie = COOKIE('__Host-tpackages_webauthn', browser, secure => TRUE, http_only => TRUE, same_site => 'Strict', path => '/'));
+  EXPORT SOURCE transport.begin_registration AS begin_registration;
+  CREATE SOURCE transport.accept_registration FROM HTTP REQUEST AS request INTO COMMAND $api.accept_registration(HTTP_JSON_TEXT(request, 'id'), browser, HTTP_JSON_BYTES(request, 'raw_id'), HTTP_JSON_BYTES(request, 'client_data_json'), HTTP_JSON_BYTES(request, 'attestation_object'))
+    LET browser = REQUIRE_SOME(HTTP_SECRET_COOKIE_UNIQUE(request, '__Host-tpackages_webauthn'))
+    WITH (method = 'POST', path = $prefix || '/registration/response', origin = $origin, admission = 'same_origin',
+      authentication = 'application', content_type = 'application/json', max_body_bytes = 65536,
+      request_storage = 'protected_transient', capture = 'redacted_metadata', response_cache = 'no-store',
+      response_status = 200, response_body = RESULT);
+  EXPORT SOURCE transport.accept_registration AS accept_registration;
+  CREATE SOURCE transport.begin_authentication FROM HTTP REQUEST AS request INTO COMMAND $api.begin_authentication(browser, HTTP_JSON_OPTION_BYTES(request, 'expected_user'))
+    LET browser = COALESCE(HTTP_SECRET_COOKIE_UNIQUE(request, '__Host-tpackages_webauthn'), RANDOM_SECRET(32))
+    WITH (method = 'POST', path = $prefix || '/authentication/options', origin = $origin, admission = 'same_origin',
+      authentication = 'application', content_type = 'application/json', max_body_bytes = 65536,
+      request_storage = 'protected_transient', capture = 'redacted_metadata', response_cache = 'no-store',
+      response_status = 200, response_body = RESULT,
+      response_cookie = COOKIE('__Host-tpackages_webauthn', browser, secure => TRUE, http_only => TRUE, same_site => 'Strict', path => '/'));
+  EXPORT SOURCE transport.begin_authentication AS begin_authentication;
+  CREATE SOURCE transport.accept_authentication FROM HTTP REQUEST AS request INTO COMMAND $api.accept_authentication(HTTP_JSON_TEXT(request, 'id'), browser, HTTP_JSON_BYTES(request, 'raw_id'), HTTP_JSON_OPTION_BYTES(request, 'user_handle'), HTTP_JSON_BYTES(request, 'client_data_json'), HTTP_JSON_BYTES(request, 'authenticator_data'), HTTP_JSON_BYTES(request, 'signature'))
+    LET browser = REQUIRE_SOME(HTTP_SECRET_COOKIE_UNIQUE(request, '__Host-tpackages_webauthn'))
+    WITH (method = 'POST', path = $prefix || '/authentication/response', origin = $origin, admission = 'same_origin',
+      authentication = 'application', content_type = 'application/json', max_body_bytes = 65536,
+      request_storage = 'protected_transient', capture = 'redacted_metadata', response_cache = 'no-store',
+      response_status = 200, response_body = RESULT);
+  EXPORT SOURCE transport.accept_authentication AS accept_authentication;
+END;

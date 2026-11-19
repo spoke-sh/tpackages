@@ -1,0 +1,14 @@
+CREATE DATAFLOW saml.expire FROM TIMER EVERY SECONDS(60) AS tick AS BEGIN ATOMIC
+  FOR item IN (SELECT MANY key FROM saml.request_expiry WHERE expires_at <= NOW() ORDER BY expires_at, key LIMIT 64) DO
+    LET current = REQUIRE_SOME(GET FROM saml.requests KEY item.key);
+    REQUIRE current.value.expires_at <= NOW() ELSE 'CleanupConflict';
+    DELETE FROM saml.requests KEY item.key IF REVISION = current.revision;
+    DELETE FROM saml.request_expiry WHERE key = item.key;
+  END FOR;
+  FOR item IN (SELECT MANY key FROM saml.replay_expiry WHERE expires_at <= NOW() ORDER BY expires_at, key LIMIT 64) DO
+    LET current = REQUIRE_SOME(GET FROM saml.replay KEY item.key);
+    REQUIRE current.value.expires_at <= NOW() ELSE 'CleanupConflict';
+    DELETE FROM saml.replay KEY item.key IF REVISION = current.revision;
+    DELETE FROM saml.replay_expiry WHERE key = item.key;
+  END FOR;
+END;

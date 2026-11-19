@@ -1,0 +1,15 @@
+CREATE PRIVATE DOCUMENT saml.trust (
+  id TEXT PRIMARY KEY, keys LIST<PUBLIC_KEY_REF> NOT NULL, enabled BOOLEAN NOT NULL
+) WITH (profile = 'versioned');
+INSERT INTO saml.trust VALUES ('idp', $config.trusted_signing_keys, TRUE) ON CONFLICT DO NOTHING;
+CREATE PRIVATE KV saml.requests (ROW(
+  id TEXT, owner OWNER, browser_hash BYTES, expires_at TIMESTAMP, consumed BOOLEAN, trust_revision REVISION
+));
+CREATE PRIVATE KV saml.replay (ROW(expires_at TIMESTAMP));
+CREATE PRIVATE TABLE saml.request_expiry (key TEXT PRIMARY KEY, expires_at TIMESTAMP NOT NULL);
+CREATE PRIVATE TABLE saml.replay_expiry (key TEXT PRIMARY KEY, expires_at TIMESTAMP NOT NULL);
+CREATE INDEX saml.request_due ON saml.request_expiry (expires_at, key);
+CREATE INDEX saml.replay_due ON saml.replay_expiry (expires_at, key);
+CREATE PRIVATE STREAM saml.completions (
+  event_id TEXT, owner OWNER, identity types.Identity, observed_at TIMESTAMP
+) WITH (retention = 'unlimited', partition_by = 'owner', disclosure = 'current_owner');

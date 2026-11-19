@@ -1,0 +1,8 @@
+CREATE DATAFLOW webauthn.expire FROM TIMER EVERY SECONDS(60) AS tick AS BEGIN ATOMIC
+  FOR item IN (SELECT MANY id FROM webauthn.expiry WHERE expires_at <= NOW() ORDER BY expires_at, id LIMIT 64) DO
+    LET current = REQUIRE_SOME(GET FROM webauthn.challenges KEY item.id);
+    REQUIRE current.value.expires_at <= NOW() ELSE 'CleanupConflict';
+    DELETE FROM webauthn.challenges KEY item.id IF REVISION = current.revision;
+    DELETE FROM webauthn.expiry WHERE id = item.id;
+  END FOR;
+END;

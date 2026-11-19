@@ -1,0 +1,16 @@
+IMPORT oauth FROM PACKAGE oauth FILE 'build.transit';
+
+CREATE PUBLIC MODULE Provider() AS BEGIN
+  LET implementation = USE oauth.StaticProvider(ROW(
+    name => 'github', issuer => 'https://github.com',
+    authorization_endpoint => 'https://github.com/login/oauth/authorize',
+    token_endpoint => 'https://github.com/login/oauth/access_token',
+    revocation_endpoint => NONE, token_method => 'POST',
+    token_encoding => 'form', client_auth => 'client_secret_post',
+    scope_separator => ' ', response_scope_separator => ',',
+    pkce_s256 => TRUE, refresh => TRUE, issuer_parameter => FALSE,
+    authorization_parameter_names => SET('login', 'allow_signup')
+  ));
+  EXPORT FUNCTION implementation.metadata AS metadata;
+  EXPORT FUNCTION implementation.normalize AS normalize;
+END;

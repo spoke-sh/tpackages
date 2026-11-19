@@ -1,0 +1,23 @@
+IMPORT core FROM './service-provider.transit';
+CREATE PUBLIC MODULE Http(binding SCHEMA_BINDING, api MODULE OF core.ServiceProvider,
+  origin TEXT, begin_path TEXT, acs_path TEXT) AS BEGIN
+  BIND SCHEMA transport TO $binding;
+  REQUIRE HTTPS_ORIGIN($origin) AND STARTS_WITH($begin_path, '/') AND STARTS_WITH($acs_path, '/')
+    AND $begin_path <> $acs_path AND $api.assertion_endpoint() = $origin || $acs_path ELSE 'InvalidRoutes';
+  CREATE SOURCE transport.begin FROM HTTP REQUEST AS request INTO COMMAND $api.begin_sso(browser)
+    LET browser = COALESCE(HTTP_SECRET_COOKIE_UNIQUE(request, '__Host-tpackages_saml'), RANDOM_SECRET(32))
+    WITH (method = 'POST', path = $begin_path, origin = $origin, admission = 'same_origin', authentication = 'application', max_body_bytes = 0,
+      request_storage = 'protected_transient', capture = 'redacted_metadata', response_cache = 'no-store',
+      response_status = 303, response_location = RESULT.location,
+      response_cookie = COOKIE('__Host-tpackages_saml', browser, secure => TRUE, http_only => TRUE,
+        same_site => 'None', path => '/', expires => RESULT.expires_at));
+  CREATE SOURCE transport.assertion FROM HTTP REQUEST AS request
+    INTO COMMAND $api.accept_assertion(HTTP_FORM_UNIQUE(request, 'RelayState'),
+      REQUIRE_SOME(HTTP_SECRET_COOKIE_UNIQUE(request, '__Host-tpackages_saml')),
+      HTTP_SECRET_FORM_UNIQUE(request, 'SAMLResponse'))
+    WITH (method = 'POST', path = $acs_path, admission = 'challenge', authentication = 'application', content_type = 'application/x-www-form-urlencoded',
+      max_body_bytes = 400000, request_storage = 'protected_transient', capture = 'redacted_metadata',
+      response_cache = 'no-store', response_status = 200, response_body = RESULT);
+  EXPORT SOURCE transport.begin AS begin;
+  EXPORT SOURCE transport.assertion AS assertion;
+END;

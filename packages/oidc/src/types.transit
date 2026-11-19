@@ -1,0 +1,16 @@
+IMPORT oauth FROM PACKAGE oauth FILE 'build.transit';
+
+CREATE PUBLIC TYPE Configuration AS ROW(
+  oauth oauth.Configuration, issuer TEXT, authorization_endpoint TEXT,
+  token_endpoint TEXT, jwks_uri TEXT, client_auth TEXT,
+  metadata_seconds BIGINT, clock_skew_seconds BIGINT, max_token_age_seconds BIGINT,
+  max_auth_age_seconds OPTION<BIGINT>
+);
+
+CREATE PUBLIC TYPE Identity AS ROW(
+  issuer TEXT, subject TEXT, audience TEXT, authenticated_at OPTION<BIGINT>,
+  expires_at BIGINT, credential oauth.CredentialId
+);
+
+CREATE PUBLIC VARIANT Outcome AS Pending() | Verified(identity Identity)
+  | Refused(reason TEXT) | Unknown(operation oauth.OperationId);

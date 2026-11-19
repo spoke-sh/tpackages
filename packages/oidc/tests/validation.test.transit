@@ -1,0 +1,51 @@
+IMPORT library FROM '../build.transit';
+IMPORT fixtures FROM './fixtures.transit';
+
+TEST 'verify signed claims rather than treating an access token as identity' AS BEGIN
+  SET TEST KEY 'issuer' ALGORITHM 'RSA-2048';
+  LET claims = library.validate_id_token(fixtures.token(fixtures.claims('nonce-1')), TEST SECRET 'access',
+    fixtures.keys(), 'https://accounts.google.com', 'example-client', 'nonce-1', 1767225600, 30, 3600, NONE);
+  ASSERT claims.subject = 'subject-1';
+  ASSERT claims.issuer = 'https://accounts.google.com';
+END;
+
+TEST 'unsigned tokens and multi-audience tokens without azp are refused' AS BEGIN
+  SET TEST KEY 'issuer' ALGORITHM 'RSA-2048';
+  LET unsigned = TEST_PROTECT(BASE64URL(UTF8('{"alg":"none"}')) || '.'
+    || BASE64URL(UTF8(JSON_SERIALIZE(fixtures.claims('nonce-1')))) || '.');
+  ASSERT library.validate_id_token(unsigned, TEST SECRET 'access', fixtures.keys(),
+    'https://accounts.google.com', 'example-client', 'nonce-1', 1767225600, 30, 3600, NONE)
+    FAILS WITH 'UnsupportedAlgorithm';
+  LET multiple = fixtures.token(JSON_SET(fixtures.claims('nonce-1'), 'aud', JSON '["example-client","other-client"]'));
+  ASSERT library.validate_id_token(multiple, TEST SECRET 'access', fixtures.keys(),
+    'https://accounts.google.com', 'example-client', 'nonce-1', 1767225600, 30, 3600, NONE)
+    FAILS WITH 'AuthorizedPartyMismatch';
+END;
+
+TEST 'claim validation rejects issuer audience nonce time and authorized-party substitutions' AS BEGIN
+  SET TEST KEY 'issuer' ALGORITHM 'RSA-2048';
+  FOR case IN [
+    ROW(field => 'iss', value => JSON '"https://attacker.example"', error => 'IssuerMismatch'),
+    ROW(field => 'aud', value => JSON '"other-client"', error => 'AudienceMismatch'),
+    ROW(field => 'nonce', value => JSON '"other-nonce"', error => 'NonceMismatch'),
+    ROW(field => 'exp', value => JSON '1767225500', error => 'InvalidTokenTime'),
+    ROW(field => 'azp', value => JSON '"other-client"', error => 'AuthorizedPartyMismatch')
+  ] DO
+    LET token = fixtures.token(JSON_SET(fixtures.claims('nonce-1'), case.field, case.value));
+    ASSERT library.validate_id_token(token, TEST SECRET 'access', fixtures.keys(),
+      'https://accounts.google.com', 'example-client', 'nonce-1', 1767225600, 30, 3600, NONE) FAILS WITH case.error;
+  END FOR;
+END;
+
+TEST 'unknown keys and invalid signatures are not accepted as rotation' AS BEGIN
+  SET TEST KEY 'issuer' ALGORITHM 'RSA-2048';
+  LET token = fixtures.token(fixtures.claims('nonce-1'));
+  LET keys = fixtures.keys();
+  SET TEST KEY 'issuer' ALGORITHM 'RSA-2048';
+  ASSERT library.validate_id_token(token, TEST SECRET 'access', fixtures.keys(),
+    'https://accounts.google.com', 'example-client', 'nonce-1', 1767225600, 30, 3600, NONE) FAILS WITH 'InvalidSignature';
+  ASSERT library.validate_id_token(token, TEST SECRET 'access', JSON '{"keys":[]}',
+    'https://accounts.google.com', 'example-client', 'nonce-1', 1767225600, 30, 3600, NONE) FAILS WITH 'RefreshKeysRequired';
+  ASSERT library.validate_id_token(token, TEST SECRET 'access', keys,
+    'https://accounts.google.com', 'example-client', 'nonce-1', 1767225600, 30, 3600, NONE).subject = 'subject-1';
+END;

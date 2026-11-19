@@ -1,0 +1,17 @@
+CREATE DATAFLOW oauth.expire FROM TIMER EVERY SECONDS(60) AS tick AS BEGIN ATOMIC
+  LET expired = SELECT MANY e.id FROM oauth.expiry e WHERE e.expires_at <= NOW()
+    AND NOT EXISTS (SELECT id FROM oauth.operations o WHERE o.authorization = SOME(e.id)
+      AND o.outcome IS types.Outcome.Pending)
+    ORDER BY e.expires_at, e.id LIMIT 64;
+  FOR item IN expired DO
+    LET entry = GET FROM oauth.challenges KEY item.id;
+    IF IS_PRESENT(entry) THEN
+      LET current = REQUIRE_SOME(entry);
+      REQUIRE current.value.expires_at <= NOW() ELSE 'CleanupConflict';
+      DESTROY_PROTECTED(current.value.verifier);
+      DELETE FROM oauth.challenges KEY item.id IF REVISION = current.revision;
+    END IF;
+    DELETE FROM oauth.expiry WHERE id = item.id;
+  END FOR;
+  -- Terminal/unknown operation metadata and native effect receipts remain retained.
+END;

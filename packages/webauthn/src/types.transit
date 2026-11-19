@@ -1,0 +1,20 @@
+CREATE PUBLIC TYPE Configuration AS ROW(
+  rp_id TEXT, rp_name TEXT, origins SET<TEXT>, challenge_seconds BIGINT,
+  require_user_verification BOOLEAN, reject_counter_regression BOOLEAN
+);
+
+CREATE PUBLIC INTERFACE Policy AS BEGIN
+  FUNCTION can_read_credential(owner OWNER, user_handle BYTES) RETURNS BOOLEAN READS AUTHORITY;
+  GUARD allow_registration(owner OWNER, user_handle BYTES) READS AUTHORITY;
+  GUARD allow_authentication(owner OWNER, expected_user OPTION<BYTES>) READS AUTHORITY;
+END;
+
+CREATE PUBLIC TYPE Credential AS ROW(
+  id BYTES, user_handle BYTES, public_key PUBLIC_KEY, sign_count BIGINT,
+  backup_eligible BOOLEAN, backed_up BOOLEAN
+);
+
+CREATE PUBLIC TYPE Challenge AS ROW(
+  owner OWNER, browser_hash BYTES, challenge BYTES, ceremony TEXT,
+  user_handle OPTION<BYTES>, expires_at TIMESTAMP, consumed BOOLEAN, policy_revision REVISION
+);

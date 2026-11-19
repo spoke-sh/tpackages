@@ -1,0 +1,13 @@
+WORKSPACE selective AS BEGIN
+  PACKAGE selected AT './selected';
+  PACKAGE unrelated AT './unrelated';
+END;
+IMPORT selected FROM PACKAGE selected FILE 'build.transit';
+EXPORT TARGET default = selected.default;
+CREATE PUBLIC TEST TARGET tests AS BEGIN
+  TEST 'unselected package and test declarations are not parsed' AS BEGIN
+    ASSERT DEPENDENCIES default EQUAL SET('selected');
+    ASSERT NO OUTPUT FROM PACKAGES EXCEPT SET('selected');
+    ASSERT BUILD default SUCCEEDS;
+  END;
+END;

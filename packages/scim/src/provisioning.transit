@@ -1,0 +1,50 @@
+CREATE DATAFLOW scim.create_resource FROM COMMAND (kind TEXT, body JSON) AS request
+  WITH (idempotency = 'original_owner_request') AS BEGIN ATOMIC
+  REQUIRE scim.require_action(request.kind, 'POST', NONE);
+  LET document = schema.validate(request.kind, schema.normalize(request.body));
+  LET resource_id = OPERATION_ID(CURRENT_REQUEST_ID(), 'scim-resource');
+  LET resource = stamp(request.kind, resource_id, document, TIMESTAMP_FORMAT(NOW()), TIMESTAMP_FORMAT(NOW()), '"' || NEW_ID() || '"');
+  CALL $store.insert(request.kind, resource);
+  LET accepted = render(request.kind, (SELECT ONE document FROM $store.resources WHERE kind = request.kind AND id = resource_id).document);
+  RETURN response(201, SOME(accepted), MAP('Location' => JSON_STRING_AT(accepted, ['meta', 'location']),
+    'ETag' => JSON_STRING_AT(accepted, ['meta', 'version'])));
+END;
+
+CREATE DATAFLOW scim.replace_resource FROM COMMAND (kind TEXT, id TEXT, if_match OPTION<TEXT>, body JSON) AS request
+  WITH (idempotency = 'original_owner_request') AS BEGIN ATOMIC
+  REQUIRE scim.require_action(request.kind, 'PUT', SOME(request.id));
+  LET current = MATCH (SELECT OPTIONAL * FROM $store.resources WHERE kind = request.kind AND id = request.id)
+    WHEN SOME(value) THEN value ELSE FAIL 'notFound' END;
+  REQUIRE scim.require_version(current.version, request.if_match);
+  LET changed = schema.validate(request.kind, schema.normalize(request.body));
+  REQUIRE OPTION_ALL(JSON_OPTION_STRING(changed, 'id'), value => value = request.id) ELSE 'mutability';
+  LET resource = stamp(request.kind, request.id, changed, JSON_STRING_AT(current.document, ['meta', 'created']),
+    TIMESTAMP_FORMAT(NOW()), '"' || NEW_ID() || '"');
+  CALL $store.replace(request.kind, request.id, current.version, resource);
+  LET accepted = render(request.kind, (SELECT ONE document FROM $store.resources WHERE kind = request.kind AND id = request.id).document);
+  RETURN response(200, SOME(accepted), MAP('ETag' => JSON_STRING_AT(accepted, ['meta', 'version'])));
+END;
+
+CREATE DATAFLOW scim.patch_resource FROM COMMAND (kind TEXT, id TEXT, if_match OPTION<TEXT>, body JSON) AS request
+  WITH (idempotency = 'original_owner_request') AS BEGIN ATOMIC
+  REQUIRE scim.require_action(request.kind, 'PATCH', SOME(request.id));
+  LET current = MATCH (SELECT OPTIONAL * FROM $store.resources WHERE kind = request.kind AND id = request.id)
+    WHEN SOME(value) THEN value ELSE FAIL 'notFound' END;
+  REQUIRE scim.require_version(current.version, request.if_match);
+  LET changed = patch.patch(request.kind, current.document, schema.normalize(request.body));
+  LET resource = stamp(request.kind, request.id, changed, JSON_STRING_AT(current.document, ['meta', 'created']),
+    TIMESTAMP_FORMAT(NOW()), '"' || NEW_ID() || '"');
+  CALL $store.replace(request.kind, request.id, current.version, resource);
+  LET accepted = render(request.kind, (SELECT ONE document FROM $store.resources WHERE kind = request.kind AND id = request.id).document);
+  RETURN response(200, SOME(accepted), MAP('ETag' => JSON_STRING_AT(accepted, ['meta', 'version'])));
+END;
+
+CREATE DATAFLOW scim.delete_resource FROM COMMAND (kind TEXT, id TEXT, if_match OPTION<TEXT>) AS request
+  WITH (idempotency = 'original_owner_request') AS BEGIN ATOMIC
+  REQUIRE scim.require_action(request.kind, 'DELETE', SOME(request.id));
+  LET current = MATCH (SELECT OPTIONAL * FROM $store.resources WHERE kind = request.kind AND id = request.id)
+    WHEN SOME(value) THEN value ELSE FAIL 'notFound' END;
+  REQUIRE scim.require_version(current.version, request.if_match);
+  CALL $store.remove(request.kind, request.id, current.version);
+  RETURN response(204, NONE, MAP());
+END;

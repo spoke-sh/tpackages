@@ -1,0 +1,166 @@
+CREATE FUNCTION oauth.client_auth(secret SECRET<TEXT>)
+  RETURNS ROW(headers HTTP_FIELDS, fields HTTP_FIELDS) AS BEGIN
+  REQUIRE CONTAINS(SET('client_secret_post', 'client_secret_basic'), metadata.client_auth)
+    ELSE 'UnsupportedClientAuthentication';
+  RETURN ROW(
+    headers => CASE WHEN metadata.client_auth = 'client_secret_basic'
+      THEN MAP('Accept' => 'application/json', 'Authorization' => BASIC_FORM_CREDENTIALS($config.client_id, $secret))
+      ELSE MAP('Accept' => 'application/json') END,
+    fields => CASE WHEN metadata.client_auth = 'client_secret_post'
+      THEN MAP('client_id' => $config.client_id, 'client_secret' => $secret)
+      ELSE MAP('client_id' => $config.client_id) END
+  );
+END;
+
+CREATE DATAFLOW oauth.exchange_code FROM QUEUE oauth.code_jobs AS job AS BEGIN
+  IF oauth.outcome(job.operation) IS NOT types.Outcome.Pending THEN RETURN; END IF;
+  REQUIRE job.owner = CURRENT_OWNER() ELSE 'Forbidden';
+  REQUIRE oauth.require_policy(job.policy_revision);
+  LET secret = SECRET($config.client_secret);
+  REQUIRE secret.revision = job.secret_revision AND job.deadline > NOW() ELSE 'ConfigurationChanged';
+  LET challenge = REQUIRE_SOME(GET FROM oauth.challenges KEY job.authorization).value;
+  REQUIRE challenge.status = 'claimed' AND challenge.operation = SOME(job.operation)
+    AND challenge.expires_at > NOW() ELSE 'ChallengeUnavailable';
+  LET auth = oauth.client_auth(secret);
+  LET fields = MAP_MERGE_DISJOINT(auth.fields, MAP(
+    'grant_type' => 'authorization_code', 'code' => UNPROTECT(job.code, 'oauth.code'),
+    'redirect_uri' => $config.redirect_uri, 'code_verifier' => UNPROTECT(challenge.verifier, 'oauth.pkce')));
+  LET response = EXECUTE SINK oauth.token EFFECT job.operation
+    GUARD oauth.require_policy(job.policy_revision) AND SECRET_CURRENT(secret) AND job.deadline > NOW()
+    HEADERS auth.headers FIELDS fields ON REPLAY OBSERVE ONLY;
+  REQUIRE response.outcome <> 'unknown' ELSE 'EffectUnknown';
+  REQUIRE response.outcome = 'known' AND response.status = 200 ELSE 'ProviderRejected';
+  LET grant = $provider.normalize(JSON_PARSE_PROTECTED(response.body,
+    max_bytes => 65536, max_depth => 8, duplicate_keys => 'reject'), $config.scopes);
+  BEGIN ATOMIC
+    REQUIRE oauth.require_policy(job.policy_revision);
+    REQUIRE SECRET_CURRENT(secret) AND job.deadline > NOW() ELSE 'ConfigurationChanged';
+    LET current = REQUIRE_SOME(GET FROM oauth.challenges KEY job.authorization);
+    REQUIRE current.value.status = 'claimed' AND current.value.operation = SOME(job.operation) ELSE 'CallbackAlreadyClaimed';
+    LET expires = NOW() + SECONDS(MIN(COALESCE(grant.expires_in, $config.credential_seconds), $config.credential_seconds));
+    LET refresh_expires = NOW() + SECONDS(MIN(COALESCE(grant.refresh_expires_in,
+      $config.credential_seconds), $config.credential_seconds));
+    LET credential = types.CredentialId(OPERATION_ID(job.operation, 'credential'));
+    INSERT INTO oauth.credentials VALUES (credential, job.owner,
+      PROTECT(grant.access, 'oauth.access', expires),
+      OPTION_MAP(grant.refresh, value => PROTECT(value, 'oauth.refresh', refresh_expires)),
+      OPTION_MAP(grant.id_token, value => PROTECT(value, 'oauth.id_token', expires)),
+      grant.scopes, expires, refresh_expires, 1, 'active');
+    PUT INTO oauth.challenges KEY job.authorization VALUE current.value WITH (status = 'complete')
+      IF REVISION = current.revision;
+    DESTROY_PROTECTED(current.value.verifier);
+    DESTROY_PROTECTED(job.code);
+    CALL oauth.settle(job.operation, types.Outcome.Granted(credential));
+  END;
+ON FAILURE failure
+  BEGIN ATOMIC
+    IF oauth.outcome(job.operation) IS types.Outcome.Pending THEN
+      LET unknown = failure.effect_outcome = 'unknown' OR failure.code = 'EffectUnknown';
+      LET current = REQUIRE_SOME(GET FROM oauth.challenges KEY job.authorization);
+      PUT INTO oauth.challenges KEY job.authorization VALUE current.value WITH (
+        status = CASE WHEN unknown THEN 'unknown' ELSE 'refused' END) IF REVISION = current.revision;
+      DESTROY_PROTECTED(current.value.verifier);
+      DESTROY_PROTECTED(job.code);
+      CALL oauth.settle(job.operation, CASE WHEN unknown THEN types.Outcome.Unknown(job.operation)
+        ELSE types.Outcome.Refused(failure.public_code) END);
+    END IF;
+  END;
+END;
+
+CREATE DATAFLOW oauth.refresh_token FROM QUEUE oauth.refresh_jobs AS job AS BEGIN
+  IF oauth.outcome(job.operation) IS NOT types.Outcome.Pending THEN RETURN; END IF;
+  REQUIRE job.owner = CURRENT_OWNER() ELSE 'Forbidden';
+  REQUIRE oauth.require_policy(job.policy_revision);
+  LET secret = SECRET($config.client_secret);
+  REQUIRE secret.revision = job.secret_revision AND job.deadline > NOW() ELSE 'ConfigurationChanged';
+  LET previous = SELECT ONE * FROM oauth.credentials WHERE id = job.credential AND owner = job.owner;
+  REQUIRE previous.status = 'refreshing' AND previous.generation = job.generation
+    AND previous.refresh_expires_at > NOW() ELSE 'StaleCredential';
+  LET auth = oauth.client_auth(secret);
+  LET response = EXECUTE SINK oauth.token EFFECT job.operation
+    GUARD oauth.require_policy(job.policy_revision) AND SECRET_CURRENT(secret) AND job.deadline > NOW()
+    HEADERS auth.headers FIELDS MAP_MERGE_DISJOINT(auth.fields, MAP(
+      'grant_type' => 'refresh_token', 'refresh_token' => UNPROTECT(REQUIRE_SOME(previous.refresh), 'oauth.refresh')))
+    ON REPLAY OBSERVE ONLY;
+  REQUIRE response.outcome <> 'unknown' ELSE 'EffectUnknown';
+  REQUIRE response.outcome = 'known' AND response.status = 200 ELSE 'ProviderRejected';
+  LET grant = $provider.normalize(JSON_PARSE_PROTECTED(response.body,
+    max_bytes => 65536, max_depth => 8, duplicate_keys => 'reject'), previous.scopes);
+  BEGIN ATOMIC
+    REQUIRE oauth.require_policy(job.policy_revision);
+    REQUIRE SECRET_CURRENT(secret) AND job.deadline > NOW() ELSE 'ConfigurationChanged';
+    LET current = SELECT ONE * FROM oauth.credentials WHERE id = job.credential AND owner = job.owner;
+    REQUIRE current.status = 'refreshing' AND current.generation = job.generation ELSE 'StaleCredential';
+    LET expires = NOW() + SECONDS(MIN(COALESCE(grant.expires_in, $config.credential_seconds), $config.credential_seconds));
+    LET refresh_expires = CASE WHEN IS_PRESENT(grant.refresh)
+      THEN NOW() + SECONDS(MIN(COALESCE(grant.refresh_expires_in, $config.credential_seconds), $config.credential_seconds))
+      ELSE current.refresh_expires_at END;
+    LET next_refresh = CASE WHEN IS_PRESENT(grant.refresh)
+      THEN SOME(PROTECT(REQUIRE_SOME(grant.refresh), 'oauth.refresh', refresh_expires)) ELSE current.refresh END;
+    IF IS_PRESENT(grant.refresh) THEN
+      FOR handle IN OPTION_LIST(current.refresh) DO DESTROY_PROTECTED(handle); END FOR;
+    END IF;
+    DESTROY_PROTECTED(current.token);
+    FOR handle IN OPTION_LIST(current.id_token) DO DESTROY_PROTECTED(handle); END FOR;
+    UPDATE oauth.credentials SET token = PROTECT(grant.access, 'oauth.access', expires),
+      refresh = next_refresh, id_token = OPTION_MAP(grant.id_token, value => PROTECT(value, 'oauth.id_token', expires)),
+      scopes = grant.scopes, expires_at = expires, refresh_expires_at = refresh_expires,
+      generation = generation + 1, status = 'active' WHERE id = job.credential;
+    CALL oauth.settle(job.operation, types.Outcome.Granted(job.credential));
+  END;
+ON FAILURE failure
+  BEGIN ATOMIC
+    IF oauth.outcome(job.operation) IS types.Outcome.Pending THEN
+      LET unknown = failure.effect_outcome = 'unknown' OR failure.code = 'EffectUnknown';
+      UPDATE oauth.credentials SET status = CASE WHEN unknown THEN 'unknown' ELSE 'refused' END
+        WHERE id = job.credential AND generation = job.generation;
+      CALL oauth.settle(job.operation, CASE WHEN unknown THEN types.Outcome.Unknown(job.operation)
+        ELSE types.Outcome.Refused(failure.public_code) END);
+    END IF;
+  END;
+END;
+
+CREATE DATAFLOW oauth.revoke_token FROM QUEUE oauth.revoke_jobs AS job AS BEGIN
+  IF oauth.outcome(job.operation) IS NOT types.Outcome.Pending THEN RETURN; END IF;
+  REQUIRE job.owner = CURRENT_OWNER() ELSE 'Forbidden';
+  REQUIRE oauth.require_policy(job.policy_revision);
+  LET secret = SECRET($config.client_secret);
+  REQUIRE secret.revision = job.secret_revision AND job.deadline > NOW() ELSE 'ConfigurationChanged';
+  LET credential = SELECT ONE * FROM oauth.credentials WHERE id = job.credential AND owner = job.owner;
+  REQUIRE credential.status = 'revoking' AND credential.generation = job.generation ELSE 'StaleCredential';
+  LET auth = oauth.client_auth(secret);
+  IF IS_PRESENT(metadata.revocation_endpoint) THEN
+    LET response = EXECUTE SINK oauth.revocation EFFECT job.operation
+      GUARD oauth.require_policy(job.policy_revision) AND SECRET_CURRENT(secret) AND job.deadline > NOW()
+      HEADERS auth.headers FIELDS MAP_MERGE_DISJOINT(auth.fields, MAP(
+        'token' => CASE WHEN IS_PRESENT(credential.refresh)
+          THEN UNPROTECT(REQUIRE_SOME(credential.refresh), 'oauth.refresh') ELSE UNPROTECT(credential.token, 'oauth.access') END,
+        'token_type_hint' => CASE WHEN IS_PRESENT(credential.refresh) THEN 'refresh_token' ELSE 'access_token' END))
+      ON REPLAY OBSERVE ONLY;
+    REQUIRE response.outcome <> 'unknown' ELSE 'EffectUnknown';
+    REQUIRE response.outcome = 'known' AND response.status = 200 ELSE 'ProviderRejected';
+  ELSE
+    FAIL 'RevocationUnsupported';
+  END IF;
+  BEGIN ATOMIC
+    REQUIRE oauth.require_policy(job.policy_revision);
+    REQUIRE SECRET_CURRENT(secret) ELSE 'ConfigurationChanged';
+    LET current = SELECT ONE * FROM oauth.credentials WHERE id = job.credential AND owner = job.owner;
+    REQUIRE current.status = 'revoking' AND current.generation = job.generation ELSE 'StaleCredential';
+    DESTROY_PROTECTED(current.token);
+    FOR handle IN OPTION_LIST(current.refresh) DO DESTROY_PROTECTED(handle); END FOR;
+    FOR handle IN OPTION_LIST(current.id_token) DO DESTROY_PROTECTED(handle); END FOR;
+    UPDATE oauth.credentials SET status = 'revoked' WHERE id = job.credential;
+    CALL oauth.settle(job.operation, types.Outcome.Revoked(job.credential));
+  END;
+ON FAILURE failure
+  BEGIN ATOMIC
+    IF oauth.outcome(job.operation) IS types.Outcome.Pending THEN
+      LET unknown = failure.effect_outcome = 'unknown' OR failure.code = 'EffectUnknown';
+      UPDATE oauth.credentials SET status = CASE WHEN unknown THEN 'unknown' ELSE 'refused' END
+        WHERE id = job.credential AND generation = job.generation;
+      CALL oauth.settle(job.operation, CASE WHEN unknown THEN types.Outcome.Unknown(job.operation)
+        ELSE types.Outcome.Refused(failure.public_code) END);
+    END IF;
+  END;
+END;

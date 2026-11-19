@@ -1,0 +1,62 @@
+-- Installation seeds once. Constructor configuration is immutable; this
+-- versioned declaration controls admission without copying secret material.
+CREATE PRIVATE DOCUMENT oauth.policy (
+  id TEXT PRIMARY KEY, enabled BOOLEAN NOT NULL
+) WITH (profile = 'versioned');
+INSERT INTO oauth.policy VALUES ('client', TRUE) ON CONFLICT DO NOTHING;
+
+CREATE PRIVATE KV oauth.challenges (ROW(
+  owner OWNER, browser_hash BYTES, verifier PROTECTED_REF, nonce OPTION<TEXT>,
+  expires_at TIMESTAMP, policy_revision REVISION, secret_revision BIGINT,
+  status TEXT, operation OPTION<types.OperationId>
+));
+CREATE PRIVATE TABLE oauth.expiry (
+  id types.AuthorizationId PRIMARY KEY, expires_at TIMESTAMP NOT NULL
+);
+CREATE INDEX oauth.expiry_due ON oauth.expiry (expires_at, id);
+CREATE PRIVATE TABLE oauth.credentials (
+  id types.CredentialId PRIMARY KEY, owner OWNER NOT NULL,
+  token PROTECTED_REF NOT NULL, refresh OPTION<PROTECTED_REF>, id_token OPTION<PROTECTED_REF>,
+  scopes SET<TEXT> NOT NULL, expires_at TIMESTAMP NOT NULL, refresh_expires_at TIMESTAMP NOT NULL,
+  generation BIGINT NOT NULL CHECK (generation > 0), status TEXT NOT NULL
+);
+CREATE PRIVATE TABLE oauth.operations (
+  id types.OperationId PRIMARY KEY, owner OWNER NOT NULL,
+  authorization OPTION<types.AuthorizationId>, outcome types.Outcome NOT NULL
+);
+CREATE PRIVATE QUEUE oauth.code_jobs (
+  operation types.OperationId, owner OWNER, authorization types.AuthorizationId,
+  code PROTECTED_REF, policy_revision REVISION, secret_revision BIGINT, deadline TIMESTAMP
+) WITH (max_attempts = 1);
+CREATE PRIVATE QUEUE oauth.refresh_jobs (
+  operation types.OperationId, owner OWNER, credential types.CredentialId,
+  generation BIGINT, policy_revision REVISION, secret_revision BIGINT, deadline TIMESTAMP
+) WITH (max_attempts = 1);
+CREATE PRIVATE QUEUE oauth.revoke_jobs (
+  operation types.OperationId, owner OWNER, credential types.CredentialId,
+  generation BIGINT, policy_revision REVISION, secret_revision BIGINT, deadline TIMESTAMP
+) WITH (max_attempts = 1);
+
+-- Required consumers retain their progress. No token bytes or protected handles.
+CREATE PRIVATE STREAM oauth.completions (
+  event_id types.OperationId, owner OWNER, authorization OPTION<types.AuthorizationId>,
+  outcome types.Outcome, observed_at TIMESTAMP
+) WITH (retention = 'unlimited', partition_by = 'owner', disclosure = 'current_owner');
+
+CREATE SINK oauth.token INTO HTTP WITH (
+  endpoint = metadata.token_endpoint, method = metadata.token_method,
+  request_encoding = metadata.token_encoding, accept = 'application/json',
+  response = 'protected_bytes', capture = 'redacted_metadata',
+  request_timeout = '10s', response_max_bytes = 65536,
+  follow_redirects = FALSE, max_attempts = 1, unknown_outcome = 'retain',
+  allowed_hosts = $config.allowed_hosts
+);
+IF IS_PRESENT(metadata.revocation_endpoint) THEN
+  CREATE SINK oauth.revocation INTO HTTP WITH (
+    endpoint = REQUIRE_SOME(metadata.revocation_endpoint), method = 'POST',
+    request_encoding = 'form', response = 'protected_bytes', capture = 'redacted_metadata',
+    request_timeout = '10s', response_max_bytes = 65536,
+    follow_redirects = FALSE, max_attempts = 1, unknown_outcome = 'retain',
+    allowed_hosts = $config.allowed_hosts
+  );
+END IF;

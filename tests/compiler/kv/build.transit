@@ -1,0 +1,8 @@
+CREATE TARGET default AS BEGIN
+  CREATE PUBLIC KV challenges (ROW(owner TEXT, expires_at TIMESTAMP, consumed BOOLEAN));
+  CREATE PUBLIC DATAFLOW claim FROM COMMAND (key TEXT) AS request AS BEGIN ATOMIC
+    LET observed = REQUIRE_SOME(GET FROM challenges KEY request.key);
+    REQUIRE NOT observed.value.consumed AND observed.value.expires_at > NOW() ELSE 'Expired';
+    PUT INTO challenges KEY request.key VALUE observed.value WITH (consumed = TRUE) IF REVISION = observed.revision;
+  END;
+END;

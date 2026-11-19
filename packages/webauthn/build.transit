@@ -1,0 +1,10 @@
+EXPORT MODULE RelyingParty FROM './src/relying-party.transit';
+EXPORT INTERFACE Policy FROM './src/types.transit';
+EXPORT TYPE Configuration FROM './src/types.transit';
+EXPORT FUNCTION decode_authenticator FROM './src/verification.transit';
+EXPORT TARGET default FROM './examples/build.transit';
+EXPORT TEST TARGET tests FROM './tests/build.transit';
+EXPORT MODULE Publication FROM './src/publication.transit';
+EXPORT MODULE Http FROM './src/http.transit';
+EXPORT TYPE Credential FROM './src/types.transit';
+EXPORT TARGET http FROM './examples/build.transit';

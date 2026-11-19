@@ -1,0 +1,7 @@
+CREATE TARGET default AS BEGIN
+  CREATE PUBLIC DATAFLOW create FROM COMMAND (name TEXT) AS request AS BEGIN ATOMIC
+    RETURN request.name;
+  END;
+  CREATE PUBLIC SOURCE http FROM HTTP REQUEST AS request INTO COMMAND create(HTTP_JSON_TEXT(request, 'name'))
+    WITH (method = 'POST', path = '/names', response_status = 200, response_body = RESULT);
+END;

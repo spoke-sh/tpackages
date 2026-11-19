@@ -1,0 +1,8 @@
+CREATE VIEW oidc.status AS
+  SELECT id, outcome FROM oidc.results WHERE owner = CURRENT_OWNER();
+CREATE FUNCTION oidc.outcome(id oauth.AuthorizationId) RETURNS types.Outcome READS (oidc.status) AS BEGIN
+  RETURN (SELECT ONE outcome FROM oidc.status WHERE id = $id).outcome;
+END;
+CREATE FUNCTION oidc.discovery_status(id TEXT) RETURNS TEXT READS (oidc.discovery) AS BEGIN
+  RETURN (SELECT ONE status FROM oidc.discovery WHERE id = $id AND owner = CURRENT_OWNER()).status;
+END;

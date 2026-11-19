@@ -1,0 +1,115 @@
+IMPORT schema FROM './schema.transit';
+
+CREATE PUBLIC VARIANT Filter AS
+  Compare(path TEXT, operator TEXT, value JSON)
+  | Present(path TEXT)
+  | And(left Filter, right Filter)
+  | Or(left Filter, right Filter)
+  | Not(inner Filter);
+
+-- A bounded generic lexer; grammar and precedence are defined here, not by a
+-- SCIM-specific native helper. This profile refuses valuePath and extensions.
+CREATE FUNCTION tokens(input TEXT) RETURNS LIST<TOKEN> AS BEGIN
+  REQUIRE LENGTH($input) <= 4096 ELSE 'invalidFilter';
+  RETURN LEX_REGEX($input, [
+    ROW(kind => 'space', pattern => '[ \t\r\n]+', skip => TRUE),
+    ROW(kind => 'string', pattern => '"([^"\\]|\\["\\/bfnrt]|\\u[0-9a-fA-F]{4})*"', skip => FALSE),
+    ROW(kind => 'number', pattern => '-?(0|[1-9][0-9]*)(\.[0-9]+)?', skip => FALSE),
+    ROW(kind => 'word', pattern => '[A-Za-z][A-Za-z0-9_.]*', skip => FALSE),
+    ROW(kind => 'punctuation', pattern => '[()]', skip => FALSE)
+  ], max_tokens => 128, unmatched => 'invalidFilter');
+END;
+
+CREATE FUNCTION parse_primary(input LIST<TOKEN>, position BIGINT, depth BIGINT)
+  RETURNS ROW(node Filter, next BIGINT) AS BEGIN
+  REQUIRE $depth < 16 AND $position < LENGTH($input) ELSE 'invalidFilter';
+  LET current = $input[$position].text;
+  IF LOWER(current) = 'not' THEN
+    LET inner = parse_primary($input, $position + 1, $depth + 1);
+    RETURN ROW(node => Filter.Not(inner.node), next => inner.next);
+  END IF;
+  IF current = '(' THEN
+    LET inner = parse_or($input, $position + 1, $depth + 1);
+    REQUIRE inner.next < LENGTH($input) AND $input[inner.next].text = ')' ELSE 'invalidFilter';
+    RETURN ROW(node => inner.node, next => inner.next + 1);
+  END IF;
+  LET path = TRY schema.canonical_path(current) ON ERROR FAIL 'invalidFilter';
+  REQUIRE $position + 1 < LENGTH($input) ELSE 'invalidFilter';
+  LET operator = LOWER($input[$position + 1].text);
+  IF operator = 'pr' THEN RETURN ROW(node => Filter.Present(path), next => $position + 2); END IF;
+  REQUIRE CONTAINS(SET('eq', 'ne', 'co', 'sw', 'ew', 'gt', 'ge', 'lt', 'le'), operator)
+    AND $position + 2 < LENGTH($input) ELSE 'invalidFilter';
+  LET value = TRY JSON_PARSE($input[$position + 2].text, max_bytes => 1024, max_depth => 1,
+    duplicate_keys => 'reject') ON ERROR FAIL 'invalidFilter';
+  REQUIRE CONTAINS(SET('string', 'number', 'boolean', 'null'), JSON_KIND(value)) ELSE 'invalidFilter';
+  REQUIRE JSON_IS_NULL(value) OR (CASE WHEN path = 'active' THEN JSON_KIND(value) = 'boolean'
+    ELSE JSON_KIND(value) = 'string' END) ELSE 'invalidFilter';
+  REQUIRE NOT CONTAINS(SET('co', 'sw', 'ew', 'gt', 'ge', 'lt', 'le'), operator)
+    OR CONTAINS(SET('string', 'number'), JSON_KIND(value)) ELSE 'invalidFilter';
+  RETURN ROW(node => Filter.Compare(path, operator, value), next => $position + 3);
+END;
+
+CREATE FUNCTION parse_and(input LIST<TOKEN>, position BIGINT, depth BIGINT)
+  RETURNS ROW(node Filter, next BIGINT) AS BEGIN
+  VAR result = parse_primary($input, $position, $depth);
+  WHILE result.next < LENGTH($input) AND LOWER($input[result.next].text) = 'and' BUDGET 128 DO
+    LET right = parse_primary($input, result.next + 1, $depth);
+    SET result = ROW(node => Filter.And(result.node, right.node), next => right.next);
+  END WHILE;
+  RETURN result;
+END;
+
+CREATE FUNCTION parse_or(input LIST<TOKEN>, position BIGINT, depth BIGINT)
+  RETURNS ROW(node Filter, next BIGINT) AS BEGIN
+  VAR result = parse_and($input, $position, $depth);
+  WHILE result.next < LENGTH($input) AND LOWER($input[result.next].text) = 'or' BUDGET 128 DO
+    LET right = parse_and($input, result.next + 1, $depth);
+    SET result = ROW(node => Filter.Or(result.node, right.node), next => right.next);
+  END WHILE;
+  RETURN result;
+END;
+
+CREATE PUBLIC FUNCTION parse_filter(input TEXT) RETURNS Filter AS BEGIN
+  LET tokens = tokens($input);
+  LET result = parse_or(tokens, 0, 0);
+  REQUIRE result.next = LENGTH(tokens) ELSE 'invalidFilter';
+  RETURN result.node;
+END;
+
+CREATE FUNCTION compare(left JSON, operator TEXT, right JSON, case_exact BOOLEAN) RETURNS BOOLEAN AS BEGIN
+  IF JSON_IS_NULL($left) OR JSON_IS_NULL($right) THEN
+    RETURN CASE WHEN $operator = 'eq' THEN $left = $right
+      WHEN $operator = 'ne' THEN $left <> $right ELSE FALSE END;
+  END IF;
+  REQUIRE JSON_KIND($left) = JSON_KIND($right) OR JSON_IS_NULL($left) OR JSON_IS_NULL($right)
+    ELSE 'invalidFilter';
+  LET left = CASE WHEN JSON_KIND($left) = 'string' AND NOT $case_exact
+    THEN JSON_FROM_TEXT(UNICODE_CASEFOLD(JSON_AS_TEXT($left))) ELSE $left END;
+  LET right = CASE WHEN JSON_KIND($right) = 'string' AND NOT $case_exact
+    THEN JSON_FROM_TEXT(UNICODE_CASEFOLD(JSON_AS_TEXT($right))) ELSE $right END;
+  RETURN MATCH $operator
+    WHEN 'eq' THEN left = right WHEN 'ne' THEN left <> right
+    WHEN 'co' THEN CONTAINS(JSON_AS_TEXT(left), JSON_AS_TEXT(right))
+    WHEN 'sw' THEN STARTS_WITH(JSON_AS_TEXT(left), JSON_AS_TEXT(right))
+    WHEN 'ew' THEN ENDS_WITH(JSON_AS_TEXT(left), JSON_AS_TEXT(right))
+    WHEN 'gt' THEN JSON_SCALAR_COMPARE(left, right) > 0
+    WHEN 'ge' THEN JSON_SCALAR_COMPARE(left, right) >= 0
+    WHEN 'lt' THEN JSON_SCALAR_COMPARE(left, right) < 0
+    WHEN 'le' THEN JSON_SCALAR_COMPARE(left, right) <= 0
+    ELSE FAIL 'invalidFilter' END;
+END;
+
+CREATE PUBLIC FUNCTION matches(filter Filter, resource JSON) RETURNS BOOLEAN
+  WITH (max_depth = 16, max_work = 4096) AS BEGIN
+  RETURN MATCH $filter
+    WHEN Present(path) THEN ANY(JSON_VALUES_AT($resource, SPLIT(path, '.')),
+      value => NOT JSON_IS_NULL(value) AND value <> JSON '""')
+    WHEN Compare(path, operator, value) THEN ANY(
+      DEFAULT_IF_EMPTY(JSON_VALUES_AT($resource, SPLIT(path, '.')), [JSON 'null']),
+      candidate => compare(candidate, operator, value,
+        CONTAINS(SET('id', 'externalId', 'members.value', 'meta.version'), path)))
+    WHEN And(left, right) THEN matches(left, $resource) AND matches(right, $resource)
+    WHEN Or(left, right) THEN matches(left, $resource) OR matches(right, $resource)
+    WHEN Not(inner) THEN NOT matches(inner, $resource)
+  END;
+END;

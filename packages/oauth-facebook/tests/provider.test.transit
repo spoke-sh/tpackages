@@ -1,0 +1,27 @@
+IMPORT library FROM '../build.transit';
+
+TEST 'facebook declares its wire profile' AS BEGIN
+  LET provider = USE library.Provider('v27.0');
+  LET metadata = provider.metadata();
+  ASSERT metadata.issuer = 'https://www.facebook.com';
+  ASSERT metadata.pkce_s256 = TRUE;
+  ASSERT metadata.refresh = FALSE;
+  ASSERT metadata.token_method = 'GET';
+  ASSERT metadata.scope_separator = ',';
+END;
+
+TEST 'missing scope does not assert that partially consented permissions were granted' AS BEGIN
+  LET provider = USE library.Provider('v27.0');
+  LET grant = provider.normalize(TEST SECRET JSON '{"access_token":"test-token","token_type":"bearer"}',
+    SET('public_profile', 'email'));
+  ASSERT grant.scopes = SET();
+END;
+
+TEST 'facebook validates token responses and granted scopes' AS BEGIN
+  LET provider = USE library.Provider('v27.0');
+  LET grant = provider.normalize(TEST SECRET JSON '{"access_token":"test-token","token_type":"bearer","scope":"read","expires_in":3600}', SET('read'));
+  ASSERT grant.scopes = SET('read');
+  ASSERT grant.expires_in = SOME(3600);
+  ASSERT provider.normalize(TEST SECRET JSON '{"error":"access_denied"}', SET('read')) FAILS WITH 'ProviderRejected';
+  ASSERT provider.normalize(TEST SECRET JSON '{"access_token":"test-token","token_type":"bearer","scope":"admin"}', SET('read')) FAILS WITH 'UnexpectedScope';
+END;

@@ -1,0 +1,18 @@
+DEPENDENCY github FROM WORKSPACE 'oauth-github';
+IMPORT github FROM PACKAGE github FILE 'build.transit';
+
+CREATE PUBLIC MODULE Conflicting() AS BEGIN
+  LET config = ROW(client_id => 'first', client_secret => 'example.oauth.client_secret',
+    redirect_uri => 'https://app.example.test/callback/github', scopes => SET('read:user'),
+    challenge_seconds => 300, credential_seconds => 86400,
+    allowed_hosts => SET('github.com'), authorization_parameters => MAP());
+  LET first = USE github.Client(SCHEMA_BINDING('conflict'), config);
+  LET second = USE github.Client(SCHEMA_BINDING('conflict'), config WITH (client_id = 'second'));
+END;
+LET conflict = USE Conflicting();
+EXPORT TARGET default AS SQL OF conflict;
+CREATE PUBLIC TEST TARGET tests AS BEGIN
+  TEST 'different definitions cannot occupy one durable instance' AS BEGIN
+    ASSERT COMPILE default FAILS WITH 'InstanceBindingConflict';
+  END;
+END;

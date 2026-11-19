@@ -1,0 +1,40 @@
+DEPENDENCY library FROM WORKSPACE 'oauth-facebook';
+IMPORT library FROM PACKAGE library FILE 'build.transit';
+
+EXPORT MODULE Application() AS BEGIN
+  LET api = USE library.Client(SCHEMA_BINDING('example_oauth_facebook'), ROW(
+    client_id => 'example-client', client_secret => 'example.oauth.client_secret',
+    redirect_uri => 'https://app.example.test/callback/facebook',
+    scopes => SET('public_profile'), challenge_seconds => 300,
+    credential_seconds => 86400, allowed_hosts => SET('www.facebook.com', 'graph.facebook.com'),
+    authorization_parameters => MAP()
+  ), 'v27.0');
+  BIND SCHEMA consumer TO SCHEMA_BINDING('example_oauth_facebook_consumer');
+  CREATE PRIVATE TABLE consumer.results (id TEXT PRIMARY KEY, owner OWNER, observed_at TIMESTAMP);
+  CREATE DATAFLOW consumer.observe FROM STREAM api.completions AS event
+    WITH (consumer = 'example.results', required = TRUE, checkpoint = 'terminal_atomic') AS BEGIN ATOMIC
+    INSERT INTO consumer.results VALUES (CAST(event.event_id AS TEXT), event.owner, event.observed_at)
+      ON CONFLICT (id) DO ASSERT SAME ROW;
+  END;
+  CREATE VIEW consumer.observed AS SELECT * FROM consumer.results WHERE owner = CURRENT_OWNER();
+  EXPORT VIEW consumer.observed AS observed;
+  AUTHORIZE MODULE api WITH (
+    commands = ROLE SETTING('example.command_role'), state = ROLE SETTING('example.state_role'),
+    effects = ROLE SETTING('example.effect_role'), reads = ROLE SETTING('example.read_role'),
+    maintenance = ROLE SETTING('example.maintenance_role')
+  );
+  AUTHORIZE DATAFLOW consumer.observe AS ROLE SETTING('example.consumer_role');
+  ACTIVATE MODULE api;
+  ACTIVATE DATAFLOW consumer.observe;
+  EXPORT MODULE api AS api;
+END;
+
+LET application = USE Application();
+EXPORT TARGET default AS SQL OF application;
+
+CREATE PUBLIC TEST TARGET tests AS BEGIN
+  TEST 'only the selected protocol closure is emitted' AS BEGIN
+    ASSERT DEPENDENCIES default EQUAL SET('oauth', 'oauth-facebook');
+    ASSERT NO OUTPUT FROM PACKAGES EXCEPT SET('oauth', 'oauth-facebook');
+  END;
+END;

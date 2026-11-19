@@ -1,0 +1,40 @@
+DEPENDENCY package_0 FROM WORKSPACE 'oauth-github';
+IMPORT package_0 FROM PACKAGE package_0 FILE 'build.transit';
+
+EXPORT MODULE Application() AS BEGIN
+  LET api = USE package_0.Client(SCHEMA_BINDING('consumer_github'), ROW(
+    client_id => 'example-client', client_secret => 'example.oauth.client_secret',
+    redirect_uri => 'https://app.example.test/callback/github',
+    scopes => SET('read:user'), challenge_seconds => 300,
+    credential_seconds => 86400, allowed_hosts => SET('github.com'),
+    authorization_parameters => MAP()
+  ));
+  BIND SCHEMA consumer TO SCHEMA_BINDING('consumer_github_consumer');
+  CREATE PRIVATE TABLE consumer.results (id TEXT PRIMARY KEY, owner OWNER, observed_at TIMESTAMP);
+  CREATE DATAFLOW consumer.observe FROM STREAM api.completions AS event
+    WITH (consumer = 'example.results', required = TRUE, checkpoint = 'terminal_atomic') AS BEGIN ATOMIC
+    INSERT INTO consumer.results VALUES (CAST(event.event_id AS TEXT), event.owner, event.observed_at)
+      ON CONFLICT (id) DO ASSERT SAME ROW;
+  END;
+  CREATE VIEW consumer.observed AS SELECT * FROM consumer.results WHERE owner = CURRENT_OWNER();
+  EXPORT VIEW consumer.observed AS observed;
+  AUTHORIZE MODULE api WITH (
+    commands = ROLE SETTING('example.command_role'), state = ROLE SETTING('example.state_role'),
+    effects = ROLE SETTING('example.effect_role'), reads = ROLE SETTING('example.read_role'),
+    maintenance = ROLE SETTING('example.maintenance_role')
+  );
+  AUTHORIZE DATAFLOW consumer.observe AS ROLE SETTING('example.consumer_role');
+  ACTIVATE MODULE api;
+  ACTIVATE DATAFLOW consumer.observe;
+  EXPORT MODULE api AS api;
+END;
+
+LET application = USE Application();
+EXPORT TARGET default AS SQL OF application;
+CREATE PUBLIC TEST TARGET tests AS BEGIN
+  TEST 'selected package closure contains no unrelated packages' AS BEGIN
+    ASSERT NO RESOURCES OF KINDS (SOURCE, PUBLICATION) IN default;
+    ASSERT DEPENDENCIES default EQUAL SET('oauth', 'oauth-github');
+    ASSERT NO OUTPUT FROM PACKAGES EXCEPT SET('oauth', 'oauth-github');
+  END;
+END;

@@ -1,0 +1,85 @@
+IMPORT types FROM './types.transit';
+
+CREATE PUBLIC FUNCTION validate(xml SECRET<BYTES>, request_id TEXT, config types.Configuration, now TIMESTAMP)
+  RETURNS ROW(assertion_id TEXT, identity types.Identity) READS (PUBLIC_KEYS) AS BEGIN
+  LET doc = XML_PARSE($xml, max_bytes => 262144, max_depth => 24, max_nodes => 4096,
+    dtd => FALSE, external_entities => FALSE, xinclude => FALSE, duplicate_ids => 'reject');
+  LET response = XML_ROOT(doc, '{urn:oasis:names:tc:SAML:2.0:protocol}Response');
+  REQUIRE XML_ATTRIBUTE(response, 'Version') = '2.0'
+    AND XML_ATTRIBUTE(response, 'Destination') = $config.acs_url
+    AND XML_ATTRIBUTE(response, 'InResponseTo') = $request_id ELSE 'InvalidResponseBinding';
+  LET status = ONLY(XML_PATH(response, [
+    '{urn:oasis:names:tc:SAML:2.0:protocol}Status', '{urn:oasis:names:tc:SAML:2.0:protocol}StatusCode']));
+  REQUIRE XML_ATTRIBUTE(status, 'Value') = 'urn:oasis:names:tc:SAML:2.0:status:Success' ELSE 'IdentityProviderRefused';
+  REQUIRE XML_TEXT(ONLY(XML_CHILDREN(response, '{urn:oasis:names:tc:SAML:2.0:assertion}Issuer')))
+    = $config.idp_entity_id ELSE 'IssuerMismatch';
+  REQUIRE LENGTH(XML_CHILDREN(response, '{urn:oasis:names:tc:SAML:2.0:assertion}EncryptedAssertion')) = 0
+    ELSE 'EncryptedAssertionUnsupported';
+  LET selected = ONLY(XML_CHILDREN(response, '{urn:oasis:names:tc:SAML:2.0:assertion}Assertion'));
+  -- Verify the exact direct child, never select an assertion globally by ID.
+  LET assertion = XML_VERIFY_SIGNATURE(selected, $config.trusted_signing_keys,
+    signature_algorithms => SET('rsa-sha256'), digest_algorithms => SET('sha256'),
+    transforms => ['enveloped-signature', 'exclusive-c14n'], reference => 'this-node');
+  REQUIRE XML_SAME_NODE(assertion, selected) ELSE 'SignedNodeMismatch';
+  IF LENGTH(XML_CHILDREN(response, '{http://www.w3.org/2000/09/xmldsig#}Signature')) > 0 THEN
+    REQUIRE XML_SAME_NODE(response, XML_VERIFY_SIGNATURE(response, $config.trusted_signing_keys,
+      signature_algorithms => SET('rsa-sha256'), digest_algorithms => SET('sha256'),
+      transforms => ['enveloped-signature', 'exclusive-c14n'], reference => 'this-node')) ELSE 'SignedNodeMismatch';
+  END IF;
+  REQUIRE XML_ATTRIBUTE(assertion, 'Version') = '2.0'
+    AND XML_TEXT(ONLY(XML_CHILDREN(assertion, '{urn:oasis:names:tc:SAML:2.0:assertion}Issuer')))
+      = $config.idp_entity_id ELSE 'IssuerMismatch';
+  LET assertion_id = XML_ATTRIBUTE(assertion, 'ID');
+  REQUIRE LENGTH(assertion_id) > 0 AND LENGTH(assertion_id) <= 256 ELSE 'InvalidAssertionId';
+  LET conditions = ONLY(XML_CHILDREN(assertion, '{urn:oasis:names:tc:SAML:2.0:assertion}Conditions'));
+  LET start = TIMESTAMP_PARSE(XML_ATTRIBUTE(conditions, 'NotBefore'));
+  LET end = TIMESTAMP_PARSE(XML_ATTRIBUTE(conditions, 'NotOnOrAfter'));
+  LET skew = SECONDS($config.clock_skew_seconds);
+  REQUIRE start <= $now + skew AND end > $now - skew AND end > start
+    AND end - start <= SECONDS($config.max_assertion_seconds) ELSE 'InvalidAssertionTime';
+  LET restrictions = XML_CHILDREN(conditions, '{urn:oasis:names:tc:SAML:2.0:assertion}AudienceRestriction');
+  REQUIRE LENGTH(restrictions) > 0 ELSE 'AudienceRequired';
+  FOR restriction IN restrictions DO
+    REQUIRE CONTAINS(MAP_LIST(XML_CHILDREN(restriction, '{urn:oasis:names:tc:SAML:2.0:assertion}Audience'),
+      node => XML_TEXT(node)), $config.entity_id) ELSE 'AudienceMismatch';
+  END FOR;
+  REQUIRE ALL(XML_ELEMENT_CHILDREN(conditions), node => CONTAINS(SET(
+    '{urn:oasis:names:tc:SAML:2.0:assertion}AudienceRestriction',
+    '{urn:oasis:names:tc:SAML:2.0:assertion}OneTimeUse'), XML_NAME(node))) ELSE 'UnsupportedCondition';
+  LET subject = ONLY(XML_CHILDREN(assertion, '{urn:oasis:names:tc:SAML:2.0:assertion}Subject'));
+  LET name_id = ONLY(XML_CHILDREN(subject, '{urn:oasis:names:tc:SAML:2.0:assertion}NameID'));
+  REQUIRE OPTION_ALL(XML_OPTION_ATTRIBUTE(name_id, 'NameQualifier'), value => value = $config.idp_entity_id)
+    AND OPTION_ALL(XML_OPTION_ATTRIBUTE(name_id, 'SPNameQualifier'), value => value = $config.entity_id)
+    ELSE 'NameQualifierMismatch';
+  LET confirmation = ONLY(XML_CHILDREN(subject, '{urn:oasis:names:tc:SAML:2.0:assertion}SubjectConfirmation'));
+  REQUIRE XML_ATTRIBUTE(confirmation, 'Method') = 'urn:oasis:names:tc:SAML:2.0:cm:bearer' ELSE 'UnsupportedConfirmation';
+  LET data = ONLY(XML_CHILDREN(confirmation, '{urn:oasis:names:tc:SAML:2.0:assertion}SubjectConfirmationData'));
+  REQUIRE XML_ATTRIBUTE(data, 'Recipient') = $config.acs_url
+    AND XML_ATTRIBUTE(data, 'InResponseTo') = $request_id ELSE 'InvalidConfirmationBinding';
+  REQUIRE NOT XML_HAS_ATTRIBUTE(data, 'NotBefore') AND NOT XML_HAS_ATTRIBUTE(data, 'Address')
+    ELSE 'UnsupportedConfirmationConstraint';
+  LET confirmation_end = TIMESTAMP_PARSE(XML_ATTRIBUTE(data, 'NotOnOrAfter'));
+  REQUIRE confirmation_end > $now - skew ELSE 'ExpiredConfirmation';
+  LET authn = ONLY(XML_CHILDREN(assertion, '{urn:oasis:names:tc:SAML:2.0:assertion}AuthnStatement'));
+  REQUIRE TIMESTAMP_PARSE(XML_ATTRIBUTE(authn, 'AuthnInstant')) <= $now + skew ELSE 'InvalidAuthenticationTime';
+  LET session_end = OPTION_MAP(XML_OPTION_ATTRIBUTE(authn, 'SessionNotOnOrAfter'), value => TIMESTAMP_PARSE(value));
+  REQUIRE OPTION_ALL(session_end, value => value > $now - skew) ELSE 'ExpiredSession';
+  VAR attributes MAP<TEXT, LIST<TEXT>> = MAP();
+  FOR statement IN XML_CHILDREN(assertion, '{urn:oasis:names:tc:SAML:2.0:assertion}AttributeStatement') DO
+    FOR attribute IN XML_CHILDREN(statement, '{urn:oasis:names:tc:SAML:2.0:assertion}Attribute') DO
+      LET name = XML_ATTRIBUTE(attribute, 'Name');
+      REQUIRE NOT MAP_HAS(attributes, name) ELSE 'DuplicateAttribute';
+      LET values = MAP_LIST(XML_CHILDREN(attribute, '{urn:oasis:names:tc:SAML:2.0:assertion}AttributeValue'),
+        value => XML_TEXT_ONLY(value));
+      REQUIRE LENGTH(values) <= 32 ELSE 'TooManyAttributeValues';
+      SET attributes = MAP_SET(attributes, name, values);
+    END FOR;
+  END FOR;
+  REQUIRE MAP_SIZE(attributes) <= 64 AND LENGTH(XML_TEXT_ONLY(name_id)) > 0 ELSE 'InvalidSubject';
+  RETURN PUBLIC_RECORD(ROW(assertion_id => assertion_id, identity => ROW(
+    issuer => $config.idp_entity_id, subject => XML_TEXT_ONLY(name_id),
+    name_id_format => COALESCE(XML_OPTION_ATTRIBUTE(name_id, 'Format'), 'urn:oasis:names:tc:SAML:1.1:nameid-format:unspecified'),
+    session_index => XML_OPTION_ATTRIBUTE(authn, 'SessionIndex'),
+    expires_at => MIN(end, confirmation_end, COALESCE(session_end, end)) + skew,
+    attributes => attributes)), purpose => 'verified_saml_identity');
+END;

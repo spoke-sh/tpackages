@@ -1,0 +1,11 @@
+DEPENDENCY oauth FROM WORKSPACE 'oauth';
+EXPORT MODULE RelyingParty FROM './src/relying-party.transit';
+EXPORT FUNCTION validate_id_token FROM './src/validation.transit';
+EXPORT TYPE Configuration FROM './src/types.transit';
+EXPORT TARGET default FROM './examples/build.transit';
+EXPORT TEST TARGET tests FROM './tests/build.transit';
+EXPORT MODULE Http FROM './src/http.transit';
+EXPORT MODULE Publication FROM './src/publication.transit';
+EXPORT TYPE Identity FROM './src/types.transit';
+EXPORT TYPE Outcome FROM './src/types.transit';
+EXPORT TARGET http FROM './examples/build.transit';

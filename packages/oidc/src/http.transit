@@ -1,0 +1,32 @@
+IMPORT oauth FROM PACKAGE oauth FILE 'build.transit';
+
+CREATE INTERFACE Commands AS BEGIN
+  DATAFLOW begin_authentication(browser SECRET<TEXT>)
+    RETURNS ROW(id oauth.AuthorizationId, location TEXT, expires_at TIMESTAMP);
+  DATAFLOW accept_callback(state TEXT, browser SECRET<TEXT>, redirect_uri TEXT,
+    issuer OPTION<TEXT>, code OPTION<SECRET<TEXT>>, error OPTION<TEXT>) RETURNS oauth.OperationId;
+END;
+
+CREATE PUBLIC MODULE Http(binding SCHEMA_BINDING, api MODULE Commands, origin TEXT, begin_path TEXT, callback_path TEXT) AS BEGIN
+  BIND SCHEMA transport TO $binding;
+  REQUIRE HTTPS_ORIGIN($origin) AND STARTS_WITH($begin_path, '/') AND STARTS_WITH($callback_path, '/')
+    AND $begin_path <> $callback_path ELSE 'InvalidRoutes';
+  CREATE SOURCE transport.begin FROM HTTP REQUEST AS request
+    INTO COMMAND $api.begin_authentication(browser)
+    LET browser = COALESCE(HTTP_SECRET_COOKIE_UNIQUE(request, '__Host-tpackages_login'), RANDOM_SECRET(32))
+    WITH (method = 'POST', path = $begin_path, origin = $origin, admission = 'same_origin', authentication = 'application',
+      max_body_bytes = 0, request_storage = 'protected_transient', capture = 'redacted_metadata',
+      response_cache = 'no-store', response_status = 303, response_location = RESULT.location,
+      response_cookie = COOKIE('__Host-tpackages_login', browser, secure => TRUE, http_only => TRUE,
+        same_site => 'Lax', path => '/', expires => RESULT.expires_at));
+  CREATE SOURCE transport.callback FROM HTTP REQUEST AS request
+    INTO COMMAND $api.accept_callback(HTTP_QUERY_UNIQUE(request, 'state'),
+      REQUIRE_SOME(HTTP_SECRET_COOKIE_UNIQUE(request, '__Host-tpackages_login')),
+      $origin || $callback_path, HTTP_QUERY_OPTION_UNIQUE(request, 'iss'),
+      HTTP_SECRET_QUERY_OPTION_UNIQUE(request, 'code'), HTTP_QUERY_OPTION_UNIQUE(request, 'error'))
+    WITH (method = 'GET', path = $callback_path, admission = 'challenge', authentication = 'application',
+      max_body_bytes = 0, request_storage = 'protected_transient', capture = 'redacted_metadata',
+      response_cache = 'no-store', response_status = 202, response_body = RESULT);
+  EXPORT SOURCE transport.begin AS begin;
+  EXPORT SOURCE transport.callback AS callback;
+END;

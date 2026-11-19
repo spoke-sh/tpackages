@@ -1,0 +1,11 @@
+EXPORT MODULE ServiceProvider FROM './src/service-provider.transit';
+EXPORT MODULE DocumentStore FROM './src/store.transit';
+EXPORT INTERFACE Store FROM './src/types.transit';
+EXPORT INTERFACE Policy FROM './src/types.transit';
+EXPORT TYPE Response FROM './src/types.transit';
+EXPORT TYPE Change FROM './src/types.transit';
+EXPORT FUNCTION parse_filter FROM './src/filter.transit';
+EXPORT TARGET default FROM './examples/build.transit';
+EXPORT TEST TARGET tests FROM './tests/build.transit';
+EXPORT MODULE Http FROM './src/http.transit';
+EXPORT TYPE Resource FROM './src/types.transit';

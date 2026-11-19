@@ -1,0 +1,19 @@
+CREATE GUARD webauthn.require_challenge(pending types.Challenge, browser SECRET<TEXT>, ceremony TEXT) AS
+  REQUIRE $pending.owner = CURRENT_OWNER() AND NOT $pending.consumed
+    AND $pending.ceremony = $ceremony AND $pending.expires_at > NOW()
+    AND SECURE_EQUAL($pending.browser_hash, COMMITMENT($browser)) ELSE 'InvalidChallenge',
+  REQUIRE EXISTS (SELECT id FROM webauthn.policy WHERE id = 'rp' AND enabled AND _revision = $pending.policy_revision)
+    ELSE 'PolicyChanged';
+
+CREATE DATAFLOW webauthn.configure_policy FROM COMMAND (
+  require_user_verification BOOLEAN, reject_counter_regression BOOLEAN, enabled BOOLEAN, expected_revision REVISION
+) AS request AS BEGIN ATOMIC
+  REQUIRE NATIVE_ALLOWED(CURRENT_OWNER(), 'configure', webauthn.policy) ELSE 'Forbidden';
+  REQUIRE CURRENT_REVISION(webauthn.policy, 'rp') = request.expected_revision ELSE 'StalePolicy';
+  UPDATE webauthn.policy SET require_user_verification = request.require_user_verification,
+    reject_counter_regression = request.reject_counter_regression, enabled = request.enabled WHERE id = 'rp';
+END;
+
+CREATE VIEW webauthn.policy_status AS
+  SELECT enabled, require_user_verification, reject_counter_regression, _revision AS revision FROM webauthn.policy WHERE id = 'rp'
+    AND NATIVE_ALLOWED(CURRENT_OWNER(), 'configure', webauthn.policy);

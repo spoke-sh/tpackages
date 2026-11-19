@@ -1,0 +1,246 @@
+-- Shared behavioral suite; each adapter runs these against its public Client.
+TEST 'authorization binds state and sends S256 without exposing the verifier'
+  USING MODULES (app) AS BEGIN
+  ACTIVATE TEST MODULE app;
+  SET TEST CLOCK '2026-01-01T00:00:00Z';
+  SET TEST OWNER 'browser-1';
+  SET TEST SECRET 'example.oauth.client_secret' TO 'client-secret';
+  LET result = INVOKE COMMAND app.api.begin_authorization(TEST SECRET 'browser-binding-32-bytes-minimum!!', NONE);
+  LET query = URL_QUERY_UNIQUE(result.location);
+  ASSERT LENGTH(query['state']) = 43;
+  ASSERT query['code_challenge_method'] = 'S256';
+  ASSERT LENGTH(query['code_challenge']) = 43;
+  ASSERT NOT MAP_HAS(query, 'code_verifier');
+  ASSERT NOT MAP_HAS(query, 'client_secret');
+  ASSERT result.expires_at = NOW() + SECONDS(300);
+END;
+
+TEST 'callback claims once and exchanges a code once'
+  USING MODULES (app) AS BEGIN
+  ACTIVATE TEST MODULE app;
+  SET TEST CLOCK '2026-01-01T00:00:00Z';
+  SET TEST OWNER 'browser-1';
+  SET TEST SECRET 'example.oauth.client_secret' TO 'client-secret';
+  LET browser = TEST SECRET 'browser-binding-32-bytes-minimum!!';
+  LET start = INVOKE COMMAND app.api.begin_authorization(browser, NONE);
+  LET query = URL_QUERY_UNIQUE(start.location);
+  MOCK SINK app.api.token RETURNS STATUS 200 BODY TEST SECRET JSON
+    '{"access_token":"token","token_type":"bearer","expires_in":3600}';
+  LET operation = INVOKE COMMAND app.api.accept_callback(query['state'], browser, query['redirect_uri'],
+    NONE, SOME(TEST SECRET 'code'), NONE);
+  ASSERT INVOKE COMMAND app.api.accept_callback(query['state'], browser, query['redirect_uri'],
+    NONE, SOME(TEST SECRET 'code'), NONE) FAILS WITH 'CallbackAlreadyClaimed';
+  DRAIN MODULE app.api WITHIN 100 STEPS;
+  ASSERT app.api.outcome(operation) IS Granted;
+  ASSERT SINK app.api.token DISPATCH COUNT = 1;
+  LET sent = TEST PROTECTED REQUEST app.api.token AT 1;
+  ASSERT S256(sent.fields['code_verifier']) = query['code_challenge'];
+  ASSERT sent.fields['redirect_uri'] = query['redirect_uri'];
+  ASSERT NO SECRET IN LOGS;
+END;
+
+TEST 'browser, redirect, issuer, and owner bindings refuse mismatches'
+  USING MODULES (app) AS BEGIN
+  ACTIVATE TEST MODULE app;
+  SET TEST OWNER 'browser-1';
+  SET TEST SECRET 'example.oauth.client_secret' TO 'client-secret';
+  LET browser = TEST SECRET 'browser-binding-32-bytes-minimum!!';
+  LET start = INVOKE COMMAND app.api.begin_authorization(browser, NONE);
+  LET query = URL_QUERY_UNIQUE(start.location);
+  ASSERT INVOKE COMMAND app.api.accept_callback(query['state'], TEST SECRET 'another-browser-binding-of-32-bytes',
+    query['redirect_uri'], NONE, SOME(TEST SECRET 'code'), NONE) FAILS WITH 'InvalidCallback';
+  ASSERT INVOKE COMMAND app.api.accept_callback(query['state'], browser, 'https://attacker.example/callback',
+    NONE, SOME(TEST SECRET 'code'), NONE) FAILS WITH 'InvalidCallback';
+  ASSERT INVOKE COMMAND app.api.accept_callback(query['state'], browser, query['redirect_uri'],
+    SOME('https://attacker.example'), SOME(TEST SECRET 'code'), NONE) FAILS WITH 'IssuerMismatch';
+  SET TEST OWNER 'browser-2';
+  ASSERT INVOKE COMMAND app.api.accept_callback(query['state'], browser, query['redirect_uri'],
+    NONE, SOME(TEST SECRET 'code'), NONE) FAILS WITH 'InvalidCallback';
+  ASSERT SINK app.api.token DISPATCH COUNT = 0;
+END;
+
+TEST 'expiry and secret rotation prevent callback admission'
+  USING MODULES (app) AS BEGIN
+  ACTIVATE TEST MODULE app;
+  SET TEST CLOCK '2026-01-01T00:00:00Z';
+  SET TEST SECRET 'example.oauth.client_secret' TO 'client-secret';
+  LET browser = TEST SECRET 'browser-binding-32-bytes-minimum!!';
+  LET first = INVOKE COMMAND app.api.begin_authorization(browser, NONE);
+  LET first_query = URL_QUERY_UNIQUE(first.location);
+  ADVANCE TEST CLOCK BY SECONDS(300);
+  ASSERT INVOKE COMMAND app.api.accept_callback(first_query['state'], browser, first_query['redirect_uri'],
+    NONE, SOME(TEST SECRET 'code'), NONE) FAILS WITH 'InvalidCallback';
+  LET second = INVOKE COMMAND app.api.begin_authorization(browser, NONE);
+  LET second_query = URL_QUERY_UNIQUE(second.location);
+  SET TEST SECRET 'example.oauth.client_secret' TO 'rotated-secret';
+  ASSERT INVOKE COMMAND app.api.accept_callback(second_query['state'], browser, second_query['redirect_uri'],
+    NONE, SOME(TEST SECRET 'code'), NONE) FAILS WITH 'ConfigurationChanged';
+  ASSERT SINK app.api.token DISPATCH COUNT = 0;
+END;
+
+TEST 'provider denial consumes the challenge without dispatch'
+  USING MODULES (app) AS BEGIN
+  ACTIVATE TEST MODULE app;
+  SET TEST SECRET 'example.oauth.client_secret' TO 'client-secret';
+  LET browser = TEST SECRET 'browser-binding-32-bytes-minimum!!';
+  LET start = INVOKE COMMAND app.api.begin_authorization(browser, NONE);
+  LET query = URL_QUERY_UNIQUE(start.location);
+  LET operation = INVOKE COMMAND app.api.accept_callback(query['state'], browser, query['redirect_uri'],
+    NONE, NONE, SOME('access_denied'));
+  ASSERT app.api.outcome(operation) = Refused('ProviderDenied');
+  ASSERT INVOKE COMMAND app.api.accept_callback(query['state'], browser, query['redirect_uri'],
+    NONE, SOME(TEST SECRET 'code'), NONE) FAILS WITH 'CallbackAlreadyClaimed';
+  ASSERT SINK app.api.token DISPATCH COUNT = 0;
+END;
+
+TEST 'unknown exchange remains unknown after recovery without redispatch'
+  USING MODULES (app) AS BEGIN
+  ACTIVATE TEST MODULE app;
+  SET TEST SECRET 'example.oauth.client_secret' TO 'client-secret';
+  LET browser = TEST SECRET 'browser-binding-32-bytes-minimum!!';
+  LET start = INVOKE COMMAND app.api.begin_authorization(browser, NONE);
+  LET query = URL_QUERY_UNIQUE(start.location);
+  MOCK SINK app.api.token RETURNS OUTCOME 'unknown';
+  LET operation = INVOKE COMMAND app.api.accept_callback(query['state'], browser, query['redirect_uri'],
+    NONE, SOME(TEST SECRET 'code'), NONE);
+  CRASH AFTER DISPATCH app.api.token;
+  DRAIN MODULE app.api WITHIN 100 STEPS;
+  RESTART;
+  DRAIN MODULE app.api WITHIN 100 STEPS;
+  ASSERT app.api.outcome(operation) = Unknown(operation);
+  ASSERT SINK app.api.token DISPATCH COUNT = 1;
+END;
+
+TEST 'a committed completion is consumed once after a lost command reply'
+  USING MODULES (app) AS BEGIN
+  ACTIVATE TEST MODULE app;
+  SET TEST SECRET 'example.oauth.client_secret' TO 'client-secret';
+  LET browser = TEST SECRET 'browser-binding-32-bytes-minimum!!';
+  LET start = INVOKE COMMAND app.api.begin_authorization(browser, NONE);
+  LET query = URL_QUERY_UNIQUE(start.location);
+  MOCK SINK app.api.token RETURNS STATUS 200 BODY TEST SECRET JSON
+    '{"access_token":"token","token_type":"bearer","expires_in":3600}';
+  CRASH AFTER COMMAND COMMIT BEFORE RESPONSE;
+  INVOKE COMMAND app.api.accept_callback(query['state'], browser,
+    query['redirect_uri'], NONE, SOME(TEST SECRET 'code'), NONE) WITH REQUEST_ID 'callback-1';
+  RESTART;
+  LET operation = INVOKE COMMAND app.api.accept_callback(query['state'], browser,
+    query['redirect_uri'], NONE, SOME(TEST SECRET 'code'), NONE) WITH REQUEST_ID 'callback-1';
+  CRASH BEFORE COMMIT PRODUCING app.api.completions;
+  DRAIN MODULE app WITHIN 100 STEPS;
+  RESTART;
+  DRAIN MODULE app WITHIN 100 STEPS;
+  ASSERT app.api.outcome(operation) IS Granted;
+  ASSERT (SELECT COUNT(*) FROM TEST STREAM app.api.completions WHERE event_id = operation) = 1;
+  ASSERT (SELECT COUNT(*) FROM app.observed WHERE id = CAST(operation AS TEXT)) = 1;
+  ASSERT SINK app.api.token DISPATCH COUNT = 1;
+  ASSERT NO SECRET IN LOGS;
+END;
+
+TEST 'concurrent callback commands share a single KV claim'
+  USING MODULES (app) AS BEGIN
+  ACTIVATE TEST MODULE app;
+  SET TEST SECRET 'example.oauth.client_secret' TO 'client-secret';
+  LET browser = TEST SECRET 'browser-binding-32-bytes-minimum!!';
+  LET start = INVOKE COMMAND app.api.begin_authorization(browser, NONE);
+  LET query = URL_QUERY_UNIQUE(start.location);
+  MOCK SINK app.api.token RETURNS STATUS 200 BODY TEST SECRET JSON
+    '{"access_token":"token","token_type":"bearer","expires_in":3600}';
+  LET race = RACE COMMANDS (
+    app.api.accept_callback(query['state'], browser, query['redirect_uri'], NONE, SOME(TEST SECRET 'code'), NONE),
+    app.api.accept_callback(query['state'], browser, query['redirect_uri'], NONE, SOME(TEST SECRET 'code'), NONE)
+  ) AT FIRST WRITE;
+  ASSERT race.accepted = 1;
+  ASSERT race.refusals = ['CallbackAlreadyClaimed'];
+  DRAIN MODULE app WITHIN 100 STEPS;
+  ASSERT SINK app.api.token DISPATCH COUNT = 1;
+  ASSERT (SELECT COUNT(*) FROM TEST STREAM app.api.completions) = 1;
+END;
+
+TEST 'a policy revision fences an admitted exchange before dispatch'
+  USING MODULES (app) AS BEGIN
+  ACTIVATE TEST MODULE app;
+  SET TEST OWNER 'browser-1';
+  SET TEST SECRET 'example.oauth.client_secret' TO 'client-secret';
+  LET browser = TEST SECRET 'browser-binding-32-bytes-minimum!!';
+  LET start = INVOKE COMMAND app.api.begin_authorization(browser, NONE);
+  LET query = URL_QUERY_UNIQUE(start.location);
+  LET operation = INVOKE COMMAND app.api.accept_callback(query['state'], browser,
+    query['redirect_uri'], NONE, SOME(TEST SECRET 'code'), NONE);
+  GRANT TEST ACTION 'configure' ON MODULE app.api TO OWNER 'operator';
+  SET TEST OWNER 'operator';
+  LET policy = SELECT ONE * FROM app.api.policy_status;
+  INVOKE COMMAND app.api.set_enabled(FALSE, policy.revision);
+  SET TEST OWNER 'browser-1';
+  DRAIN MODULE app WITHIN 100 STEPS;
+  ASSERT app.api.outcome(operation) = Refused('ConfigurationChanged');
+  ASSERT SINK app.api.token DISPATCH COUNT = 0;
+END;
+
+TEST 'challenge cleanup retains an unknown operation and its outcome'
+  USING MODULES (app) AS BEGIN
+  ACTIVATE TEST MODULE app;
+  SET TEST SECRET 'example.oauth.client_secret' TO 'client-secret';
+  LET browser = TEST SECRET 'browser-binding-32-bytes-minimum!!';
+  LET start = INVOKE COMMAND app.api.begin_authorization(browser, NONE);
+  LET query = URL_QUERY_UNIQUE(start.location);
+  MOCK SINK app.api.token RETURNS OUTCOME 'unknown';
+  LET operation = INVOKE COMMAND app.api.accept_callback(query['state'], browser,
+    query['redirect_uri'], NONE, SOME(TEST SECRET 'code'), NONE);
+  DRAIN MODULE app WITHIN 100 STEPS;
+  ADVANCE TEST CLOCK BY SECONDS(601);
+  DRAIN MODULE app WITHIN 100 STEPS;
+  RESTART;
+  DRAIN MODULE app WITHIN 100 STEPS;
+  ASSERT app.api.outcome(operation) = Unknown(operation);
+  ASSERT INVOKE COMMAND app.api.accept_callback(query['state'], browser,
+    query['redirect_uri'], NONE, SOME(TEST SECRET 'code'), NONE) FAILS WITH 'InvalidCallback';
+  ASSERT (SELECT COUNT(*) FROM TEST STREAM app.api.completions WHERE event_id = operation) = 1;
+  ASSERT SINK app.api.token DISPATCH COUNT = 1;
+END;
+
+TEST 'a lagging required consumer catches up after challenge expiry without redispatch'
+  USING MODULES (app) AS BEGIN
+  ACTIVATE TEST MODULE app;
+  SET TEST SECRET 'example.oauth.client_secret' TO 'client-secret';
+  LET browser = TEST SECRET 'browser-binding-32-bytes-minimum!!';
+  LET start = INVOKE COMMAND app.api.begin_authorization(browser, NONE);
+  LET query = URL_QUERY_UNIQUE(start.location);
+  MOCK SINK app.api.token RETURNS STATUS 200 BODY TEST SECRET JSON
+    '{"access_token":"token","token_type":"bearer","expires_in":3600}';
+  LET operation = INVOKE COMMAND app.api.accept_callback(query['state'], browser,
+    query['redirect_uri'], NONE, SOME(TEST SECRET 'code'), NONE);
+  -- Advance only the protocol graph; the application's consumer remains behind.
+  DRAIN MODULE app.api WITHIN 100 STEPS;
+  ADVANCE TEST CLOCK BY SECONDS(601);
+  DRAIN MODULE app.api WITHIN 100 STEPS;
+  ASSERT (SELECT COUNT(*) FROM app.observed) = 0;
+  ASSERT app.api.outcome(operation) IS Granted;
+  RESTART;
+  DRAIN MODULE app WITHIN 100 STEPS;
+  ASSERT (SELECT COUNT(*) FROM app.observed) = 1;
+  ASSERT SINK app.api.token DISPATCH COUNT = 1;
+  SET TEST OWNER 'unrelated-owner';
+  ASSERT (SELECT COUNT(*) FROM app.api.status) = 0;
+  ASSERT (SELECT COUNT(*) FROM TEST STREAM app.api.completions) = 0;
+END;
+
+TEST 'Stream backpressure refuses the entire callback decision and preserves its KV claim'
+  USING MODULES (app) AS BEGIN
+  ACTIVATE TEST MODULE app;
+  SET TEST SECRET 'example.oauth.client_secret' TO 'client-secret';
+  LET browser = TEST SECRET 'browser-binding-32-bytes-minimum!!';
+  LET start = INVOKE COMMAND app.api.begin_authorization(browser, NONE);
+  LET query = URL_QUERY_UNIQUE(start.location);
+  SET TEST RESOURCE BUDGET app.api.completions TO EVENTS(0);
+  ASSERT INVOKE COMMAND app.api.accept_callback(query['state'], browser,
+    query['redirect_uri'], NONE, NONE, SOME('access_denied')) FAILS WITH 'ResourceExhausted';
+  ASSERT (SELECT COUNT(*) FROM app.api.status) = 0;
+  SET TEST RESOURCE BUDGET app.api.completions TO EVENTS(100);
+  LET operation = INVOKE COMMAND app.api.accept_callback(query['state'], browser,
+    query['redirect_uri'], NONE, NONE, SOME('access_denied'));
+  ASSERT app.api.outcome(operation) = Refused('ProviderDenied');
+  DRAIN MODULE app WITHIN 100 STEPS;
+  ASSERT (SELECT COUNT(*) FROM app.observed) = 1;
+  ASSERT SINK app.api.token DISPATCH COUNT = 0;
+END;

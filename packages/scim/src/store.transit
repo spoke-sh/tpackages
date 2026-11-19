@@ -1,0 +1,119 @@
+-- One binding is one provisioning authority. These fields have disjoint owners:
+-- Tables own identity, names, memberships and ETags; Documents own other attributes.
+CREATE PUBLIC MODULE DocumentStore(binding SCHEMA_BINDING) AS BEGIN
+  BIND SCHEMA scim_store TO $binding;
+  CREATE PRIVATE TABLE scim_store.identities (
+    id TEXT PRIMARY KEY, kind TEXT NOT NULL CHECK (kind IN ('Users', 'Groups')),
+    created TEXT NOT NULL, modified TEXT NOT NULL, version TEXT NOT NULL
+  );
+  CREATE PRIVATE DOCUMENT scim_store.attributes (
+    id TEXT PRIMARY KEY REFERENCES scim_store.identities(id) ON DELETE RESTRICT,
+    value JSON NOT NULL
+  ) WITH (profile = 'versioned');
+  CREATE PRIVATE TABLE scim_store.users (
+    id TEXT PRIMARY KEY REFERENCES scim_store.identities(id) ON DELETE RESTRICT,
+    name TEXT NOT NULL,
+    normalized_name TEXT GENERATED ALWAYS AS (UNICODE_CASEFOLD(name)),
+    CONSTRAINT normalized_name UNIQUE (normalized_name)
+  );
+  CREATE PRIVATE TABLE scim_store.groups (
+    id TEXT PRIMARY KEY REFERENCES scim_store.identities(id) ON DELETE RESTRICT
+  );
+  CREATE PRIVATE TABLE scim_store.memberships (
+    group_id TEXT REFERENCES scim_store.groups(id) ON DELETE RESTRICT,
+    user_id TEXT REFERENCES scim_store.users(id) ON DELETE RESTRICT,
+    PRIMARY KEY (group_id, user_id)
+  );
+  CREATE PRIVATE STREAM scim_store.changes (
+    event_id TEXT, owner OWNER, kind TEXT, id TEXT, version TEXT, action TEXT, observed_at TIMESTAMP
+  ) WITH (retention = 'unlimited', partition_by = 'id', disclosure = 'current_owner');
+
+  CREATE VIEW scim_store.resources AS
+    SELECT r.kind, r.id, r.version, JSON_MERGE_DISJOINT(a.value,
+      JSON_OBJECT('id', r.id, 'meta', JSON_OBJECT(
+        'resourceType', CASE WHEN r.kind = 'Users' THEN 'User' ELSE 'Group' END,
+        'created', r.created, 'lastModified', r.modified, 'version', r.version)),
+      CASE WHEN r.kind = 'Users' THEN JSON_OBJECT('userName', u.name)
+      ELSE JSON_OBJECT('members', JSON_FROM_LIST(ARRAY(
+        SELECT JSON_OBJECT('value', m.user_id, 'type', 'User', 'display', member.name)
+        FROM scim_store.memberships m JOIN scim_store.users member ON member.id = m.user_id
+        WHERE m.group_id = r.id ORDER BY m.user_id))) END) AS document
+    FROM scim_store.identities r JOIN scim_store.attributes a ON a.id = r.id
+      LEFT JOIN scim_store.users u ON u.id = r.id;
+
+  CREATE PROCEDURE scim_store.emit(id TEXT, action TEXT) AS BEGIN ATOMIC
+    LET current = SELECT ONE * FROM scim_store.identities WHERE id = $id;
+    PRODUCE INTO scim_store.changes VALUES (OPERATION_ID(CURRENT_REQUEST_ID(), $action || ':' || $id || ':' || current.version),
+      CURRENT_OWNER(), current.kind, $id, current.version, $action, NOW());
+  END;
+  CREATE PROCEDURE scim_store.touch_groups(user_id TEXT) AS BEGIN ATOMIC
+    -- Renaming a user changes the group's visible member display too. All affected
+    -- ETags/events share this transaction and the retained original request ID.
+    LET affected = SELECT MANY group_id FROM scim_store.memberships WHERE user_id = $user_id ORDER BY group_id LIMIT 1001;
+    REQUIRE LENGTH(affected) <= 1000 ELSE 'tooMany';
+    FOR item IN affected DO
+      UPDATE scim_store.identities SET version = '"' || NEW_ID() || '"', modified = TIMESTAMP_FORMAT(NOW())
+        WHERE id = item.group_id;
+      CALL scim_store.emit(item.group_id, 'membership_changed');
+    END FOR;
+  END;
+
+  CREATE PUBLIC PROCEDURE insert(kind TEXT, document JSON) AS BEGIN ATOMIC
+    REQUIRE $kind IN ('Users', 'Groups') ELSE 'notFound';
+    REQUIRE (SELECT COUNT(*) FROM scim_store.identities WHERE kind = $kind) < 1000 ELSE 'tooMany';
+    LET id = JSON_STRING($document, 'id');
+    INSERT INTO scim_store.identities VALUES (id, $kind,
+      JSON_STRING_AT($document, ['meta', 'created']), JSON_STRING_AT($document, ['meta', 'lastModified']),
+      JSON_STRING_AT($document, ['meta', 'version']));
+    INSERT INTO scim_store.attributes VALUES (id, JSON_OMIT($document, SET('id', 'meta', 'userName', 'members')));
+    IF $kind = 'Users' THEN
+      INSERT INTO scim_store.users VALUES (id, JSON_STRING($document, 'userName'))
+        ON CONSTRAINT normalized_name FAIL 'uniqueness';
+    ELSE
+      INSERT INTO scim_store.groups VALUES (id);
+      INSERT INTO scim_store.memberships (group_id, user_id)
+        SELECT id, JSON_STRING(value, 'value') FROM UNNEST(JSON_ARRAY_OR_DEFAULT($document, 'members', []))
+        ON FOREIGN KEY FAILURE FAIL 'invalidValue';
+    END IF;
+    CALL scim_store.emit(id, 'created');
+  END;
+
+  CREATE PUBLIC PROCEDURE replace(kind TEXT, id TEXT, expected_version TEXT, document JSON) AS BEGIN ATOMIC
+    LET current = SELECT ONE * FROM scim_store.identities WHERE id = $id AND kind = $kind;
+    REQUIRE current.version = $expected_version ELSE 'preconditionFailed';
+    REQUIRE JSON_STRING($document, 'id') = $id ELSE 'mutability';
+    IF $kind = 'Users' THEN
+      LET old = SELECT ONE name FROM scim_store.users WHERE id = $id;
+      LET next_name = JSON_STRING($document, 'userName');
+      UPDATE scim_store.users SET name = next_name WHERE id = $id ON CONSTRAINT normalized_name FAIL 'uniqueness';
+      IF old.name <> next_name THEN CALL scim_store.touch_groups($id); END IF;
+    ELSE
+      DELETE FROM scim_store.memberships WHERE group_id = $id;
+      INSERT INTO scim_store.memberships (group_id, user_id)
+        SELECT $id, JSON_STRING(value, 'value') FROM UNNEST(JSON_ARRAY_OR_DEFAULT($document, 'members', []))
+        ON FOREIGN KEY FAILURE FAIL 'invalidValue';
+    END IF;
+    UPDATE scim_store.attributes SET value = JSON_OMIT($document, SET('id', 'meta', 'userName', 'members')) WHERE id = $id;
+    UPDATE scim_store.identities SET modified = JSON_STRING_AT($document, ['meta', 'lastModified']),
+      version = JSON_STRING_AT($document, ['meta', 'version']) WHERE id = $id;
+    CALL scim_store.emit($id, 'updated');
+  END;
+
+  CREATE PUBLIC PROCEDURE remove(kind TEXT, id TEXT, expected_version TEXT) AS BEGIN ATOMIC
+    LET current = SELECT ONE * FROM scim_store.identities WHERE id = $id AND kind = $kind;
+    REQUIRE current.version = $expected_version ELSE 'preconditionFailed';
+    IF $kind = 'Users' THEN
+      CALL scim_store.touch_groups($id);
+      DELETE FROM scim_store.memberships WHERE user_id = $id;
+      DELETE FROM scim_store.users WHERE id = $id;
+    ELSE
+      DELETE FROM scim_store.memberships WHERE group_id = $id;
+      DELETE FROM scim_store.groups WHERE id = $id;
+    END IF;
+    CALL scim_store.emit($id, 'deleted');
+    DELETE FROM scim_store.attributes WHERE id = $id;
+    DELETE FROM scim_store.identities WHERE id = $id;
+  END;
+  EXPORT VIEW scim_store.resources AS resources;
+  EXPORT STREAM scim_store.changes AS changes;
+END;

@@ -1,0 +1,17 @@
+CREATE GUARD oauth.require_policy(revision REVISION) AS
+  REQUIRE EXISTS (SELECT id FROM oauth.policy WHERE id = 'client' AND enabled
+    AND _revision = $revision) ELSE 'ConfigurationChanged';
+
+CREATE GUARD oauth.require_challenge(challenge types.Challenge, browser SECRET<TEXT>) AS
+  REQUIRE $challenge.owner = CURRENT_OWNER() AND $challenge.expires_at > NOW()
+    AND SECURE_EQUAL($challenge.browser_hash, COMMITMENT($browser)) ELSE 'InvalidCallback',
+  REQUIRE $challenge.status = 'issued' ELSE 'CallbackAlreadyClaimed',
+  REQUIRE oauth.require_policy($challenge.policy_revision),
+  REQUIRE SECRET($config.client_secret).revision = $challenge.secret_revision ELSE 'ConfigurationChanged';
+
+CREATE DATAFLOW oauth.set_enabled FROM COMMAND (enabled BOOLEAN, expected_revision REVISION) AS request
+  AS BEGIN ATOMIC
+  REQUIRE NATIVE_ALLOWED(CURRENT_OWNER(), 'configure', oauth.policy) ELSE 'Forbidden';
+  REQUIRE CURRENT_REVISION(oauth.policy, 'client') = request.expected_revision ELSE 'StalePolicy';
+  UPDATE oauth.policy SET enabled = request.enabled WHERE id = 'client';
+END;

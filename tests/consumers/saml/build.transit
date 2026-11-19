@@ -1,0 +1,39 @@
+DEPENDENCY library FROM WORKSPACE 'saml';
+IMPORT library FROM PACKAGE library FILE 'build.transit';
+
+EXPORT MODULE Application() AS BEGIN
+  LET api = USE library.ServiceProvider(SCHEMA_BINDING('example_saml'), ROW(
+    entity_id => 'https://app.example.test/saml', idp_entity_id => 'https://idp.example.test',
+    sso_endpoint => 'https://idp.example.test/sso', acs_url => 'https://app.example.test/saml/acs',
+    signing_secret => 'example.saml.signing', trusted_signing_keys => [PUBLIC_KEY_REF('example.saml.idp')],
+    request_seconds => 300, clock_skew_seconds => 30, max_assertion_seconds => 600
+  ));
+  BIND SCHEMA consumer TO SCHEMA_BINDING('example_saml_consumer');
+  CREATE PRIVATE TABLE consumer.results (id TEXT PRIMARY KEY, owner OWNER, issuer TEXT, subject TEXT);
+  CREATE DATAFLOW consumer.observe FROM STREAM api.completions AS event
+    WITH (consumer = 'example.results', required = TRUE, checkpoint = 'terminal_atomic') AS BEGIN ATOMIC
+    LET identity = event.identity;
+    INSERT INTO consumer.results VALUES (CAST(event.event_id AS TEXT), event.owner, identity.issuer, identity.subject)
+      ON CONFLICT (id) DO ASSERT SAME ROW;
+  END;
+  CREATE VIEW consumer.observed AS SELECT * FROM consumer.results WHERE owner = CURRENT_OWNER();
+  EXPORT VIEW consumer.observed AS observed;
+  AUTHORIZE MODULE api WITH (
+    commands = ROLE SETTING('example.command_role'), state = ROLE SETTING('example.state_role'),
+    effects = ROLE SETTING('example.effect_role'), reads = ROLE SETTING('example.read_role'),
+    maintenance = ROLE SETTING('example.maintenance_role')
+  );
+  AUTHORIZE DATAFLOW consumer.observe AS ROLE SETTING('example.consumer_role');
+  ACTIVATE MODULE api;
+  ACTIVATE DATAFLOW consumer.observe;
+  EXPORT MODULE api AS api;
+END;
+LET application = USE Application();
+EXPORT TARGET default AS SQL OF application;
+
+CREATE PUBLIC TEST TARGET tests AS BEGIN
+  TEST 'only the selected protocol closure is emitted' AS BEGIN
+    ASSERT DEPENDENCIES default EQUAL SET('saml');
+    ASSERT NO OUTPUT FROM PACKAGES EXCEPT SET('saml');
+  END;
+END;

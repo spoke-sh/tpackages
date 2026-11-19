@@ -1,0 +1,132 @@
+IMPORT fixtures FROM './fixtures.transit';
+
+TEST 'SP initiated SSO binds the signed assertion and consumes one request'
+  USING MODULES (app) AS BEGIN
+  ACTIVATE TEST MODULE app;
+  SET TEST CLOCK '2026-01-01T00:00:00Z';
+  SET TEST KEY 'idp' ALGORITHM 'RSA-2048';
+  SET TEST PUBLIC KEY 'example.saml.idp' TO TEST_PUBLIC_KEY('idp');
+  SET TEST KEY 'sp' ALGORITHM 'RSA-2048';
+  SET TEST SECRET 'example.saml.signing' TO TEST_PRIVATE_KEY('sp');
+  LET browser = TEST SECRET 'browser-binding-32-bytes-minimum!!';
+  LET started = INVOKE COMMAND app.api.begin_sso(browser);
+  LET relay = URL_QUERY_UNIQUE(started.location)['RelayState'];
+  LET message = fixtures.response(fixtures.request_id(started.location),
+    'https://app.example.test/saml', 'https://app.example.test/saml/acs', 'assertion-1');
+  LET identity = INVOKE COMMAND app.api.accept_assertion(relay, browser, message);
+  ASSERT identity.subject = 'subject-1';
+  ASSERT identity.issuer = 'https://idp.example.test';
+  ASSERT INVOKE COMMAND app.api.accept_assertion(relay, browser, message) FAILS WITH 'InvalidRequest';
+END;
+
+TEST 'signed but incorrectly bound assertions are rejected without consuming a request'
+  USING MODULES (app) AS BEGIN
+  ACTIVATE TEST MODULE app;
+  SET TEST CLOCK '2026-01-01T00:00:00Z';
+  SET TEST KEY 'idp' ALGORITHM 'RSA-2048';
+  SET TEST PUBLIC KEY 'example.saml.idp' TO TEST_PUBLIC_KEY('idp');
+  SET TEST KEY 'sp' ALGORITHM 'RSA-2048';
+  SET TEST SECRET 'example.saml.signing' TO TEST_PRIVATE_KEY('sp');
+  LET browser = TEST SECRET 'browser-binding-32-bytes-minimum!!';
+  LET started = INVOKE COMMAND app.api.begin_sso(browser);
+  LET relay = URL_QUERY_UNIQUE(started.location)['RelayState'];
+  LET id = fixtures.request_id(started.location);
+  ASSERT INVOKE COMMAND app.api.accept_assertion(relay, browser, fixtures.response(id,
+    'https://attacker.example', 'https://app.example.test/saml/acs', 'assertion-1')) FAILS WITH 'AudienceMismatch';
+  ASSERT INVOKE COMMAND app.api.accept_assertion(relay, browser, fixtures.response('other-request',
+    'https://app.example.test/saml', 'https://app.example.test/saml/acs', 'assertion-1')) FAILS WITH 'InvalidResponseBinding';
+  ADVANCE TEST CLOCK BY SECONDS(300);
+  ASSERT INVOKE COMMAND app.api.accept_assertion(relay, browser, fixtures.response(id,
+    'https://app.example.test/saml', 'https://app.example.test/saml/acs', 'assertion-1')) FAILS WITH 'InvalidRequest';
+END;
+
+TEST 'XML entity expansion is forbidden before signature processing'
+  USING MODULES (app) AS BEGIN
+  ACTIVATE TEST MODULE app;
+  SET TEST CLOCK '2026-01-01T00:00:00Z';
+  SET TEST KEY 'sp' ALGORITHM 'RSA-2048';
+  SET TEST SECRET 'example.saml.signing' TO TEST_PRIVATE_KEY('sp');
+  LET browser = TEST SECRET 'browser-binding-32-bytes-minimum!!';
+  LET started = INVOKE COMMAND app.api.begin_sso(browser);
+  LET relay = URL_QUERY_UNIQUE(started.location)['RelayState'];
+  ASSERT INVOKE COMMAND app.api.accept_assertion(relay, browser,
+    BASE64(UTF8('<!DOCTYPE x [<!ENTITY e SYSTEM "file:///etc/passwd">]><x>&e;</x>')))
+    FAILS WITH 'XMLDoctypeForbidden';
+END;
+
+TEST 'a signed assertion moved under Extensions cannot authenticate an unsigned direct child'
+  USING MODULES (app) AS BEGIN
+  ACTIVATE TEST MODULE app;
+  SET TEST CLOCK '2026-01-01T00:00:00Z';
+  SET TEST KEY 'idp' ALGORITHM 'RSA-2048';
+  SET TEST PUBLIC KEY 'example.saml.idp' TO TEST_PUBLIC_KEY('idp');
+  SET TEST KEY 'sp' ALGORITHM 'RSA-2048';
+  SET TEST SECRET 'example.saml.signing' TO TEST_PRIVATE_KEY('sp');
+  LET browser = TEST SECRET 'browser-binding-32-bytes-minimum!!';
+  LET started = INVOKE COMMAND app.api.begin_sso(browser);
+  LET relay = URL_QUERY_UNIQUE(started.location)['RelayState'];
+  LET valid = fixtures.response(fixtures.request_id(started.location),
+    'https://app.example.test/saml', 'https://app.example.test/saml/acs', 'signed-assertion');
+  LET document = XML_PARSE(BASE64_DECODE(valid), max_bytes => 262144, max_depth => 24, max_nodes => 4096);
+  LET root = XML_ROOT(document, '{urn:oasis:names:tc:SAML:2.0:protocol}Response');
+  LET signed = ONLY(XML_CHILDREN(root, '{urn:oasis:names:tc:SAML:2.0:assertion}Assertion'));
+  LET forged = XML_PARSE('<s:Assertion xmlns:s="urn:oasis:names:tc:SAML:2.0:assertion" ID="forged" Version="2.0"><s:Issuer>https://idp.example.test</s:Issuer><s:Subject><s:NameID>attacker</s:NameID></s:Subject></s:Assertion>');
+  LET replaced = XML_REPLACE_CHILD(root, signed, XML_DOCUMENT_ROOT(forged));
+  LET wrapped = XML_APPEND_CHILD(replaced,
+    XML_ELEMENT('{urn:oasis:names:tc:SAML:2.0:protocol}Extensions', MAP(), [signed]));
+  ASSERT INVOKE COMMAND app.api.accept_assertion(relay, browser, BASE64(XML_SERIALIZE(wrapped))) FAILS WITH 'MissingXMLSignature';
+  ASSERT (INVOKE COMMAND app.api.accept_assertion(relay, browser, valid)).subject = 'subject-1';
+END;
+
+TEST 'two concurrent valid requests cannot accept the same issuer assertion twice'
+  USING MODULES (app) AS BEGIN
+  ACTIVATE TEST MODULE app;
+  SET TEST CLOCK '2026-01-01T00:00:00Z';
+  SET TEST KEY 'idp' ALGORITHM 'RSA-2048';
+  SET TEST PUBLIC KEY 'example.saml.idp' TO TEST_PUBLIC_KEY('idp');
+  SET TEST KEY 'sp' ALGORITHM 'RSA-2048';
+  SET TEST SECRET 'example.saml.signing' TO TEST_PRIVATE_KEY('sp');
+  LET browser = TEST SECRET 'browser-binding-32-bytes-minimum!!';
+  LET first = INVOKE COMMAND app.api.begin_sso(browser);
+  LET second = INVOKE COMMAND app.api.begin_sso(browser);
+  LET first_query = URL_QUERY_UNIQUE(first.location);
+  LET second_query = URL_QUERY_UNIQUE(second.location);
+  LET race = RACE COMMANDS (
+    app.api.accept_assertion(first_query['RelayState'], browser,
+      fixtures.response(fixtures.request_id(first.location), 'https://app.example.test/saml',
+        'https://app.example.test/saml/acs', 'shared-assertion')),
+    app.api.accept_assertion(second_query['RelayState'], browser,
+      fixtures.response(fixtures.request_id(second.location), 'https://app.example.test/saml',
+        'https://app.example.test/saml/acs', 'shared-assertion'))
+  ) AT FIRST WRITE;
+  ASSERT race.accepted = 1;
+  ASSERT race.refusals = ['AssertionReplayed'];
+  CRASH BEFORE CHECKPOINT CONSUMER 'example.results';
+  DRAIN MODULE app WITHIN 100 STEPS;
+  RESTART;
+  DRAIN MODULE app WITHIN 100 STEPS;
+  ASSERT (SELECT COUNT(*) FROM TEST STREAM app.api.completions) = 1;
+  ASSERT (SELECT COUNT(*) FROM app.observed) = 1;
+END;
+
+TEST 'trust changes fence an outstanding request before XML acceptance'
+  USING MODULES (app) AS BEGIN
+  ACTIVATE TEST MODULE app;
+  SET TEST CLOCK '2026-01-01T00:00:00Z';
+  SET TEST OWNER 'browser-1';
+  SET TEST KEY 'idp' ALGORITHM 'RSA-2048';
+  SET TEST PUBLIC KEY 'example.saml.idp' TO TEST_PUBLIC_KEY('idp');
+  SET TEST KEY 'sp' ALGORITHM 'RSA-2048';
+  SET TEST SECRET 'example.saml.signing' TO TEST_PRIVATE_KEY('sp');
+  LET browser = TEST SECRET 'browser-binding-32-bytes-minimum!!';
+  LET start = INVOKE COMMAND app.api.begin_sso(browser);
+  GRANT TEST ACTION 'configure' ON MODULE app.api TO OWNER 'operator';
+  SET TEST OWNER 'operator';
+  LET trust = SELECT ONE * FROM app.api.policy_status;
+  INVOKE COMMAND app.api.configure_trust([PUBLIC_KEY_REF('example.saml.idp')], FALSE, trust.revision);
+  SET TEST OWNER 'browser-1';
+  ASSERT INVOKE COMMAND app.api.accept_assertion(URL_QUERY_UNIQUE(start.location)['RelayState'], browser,
+    fixtures.response(fixtures.request_id(start.location), 'https://app.example.test/saml',
+      'https://app.example.test/saml/acs', 'assertion-1')) FAILS WITH 'TrustChanged';
+  ASSERT (SELECT COUNT(*) FROM TEST STREAM app.api.completions) = 0;
+END;

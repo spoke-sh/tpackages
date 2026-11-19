@@ -1,0 +1,27 @@
+IMPORT fixtures FROM './fixtures.transit';
+
+TEST 'HTTP callback denial reaches the identity consumer without a finishing call'
+  USING MODULES (app) AS BEGIN
+  ACTIVATE TEST MODULE app;
+  SET TEST CLOCK '2026-01-01T00:00:00Z';
+  SET TEST OWNER 'browser-1';
+  SET TEST SECRET 'example.oauth.client_secret' TO 'client-secret';
+  SET TEST KEY 'issuer' ALGORITHM 'RSA-2048';
+  MOCK SINK app.api.configuration RETURNS STATUS 200 BODY fixtures.discovery();
+  MOCK SINK app.api.jwks RETURNS STATUS 200 BODY fixtures.keys();
+  INVOKE COMMAND app.api.discover();
+  DRAIN MODULE app WITHIN 100 STEPS;
+  LET begun = SIMULATE HTTP SOURCE app.http.begin(ROW(method => 'POST',
+    headers => MAP('Origin' => 'https://app.example.test'), raw_body => NONE));
+  ASSERT begun.status = 303;
+  LET query = URL_QUERY_UNIQUE(begun.headers['Location']);
+  LET cookie = TEST RESPONSE COOKIE begun '__Host-tpackages_login';
+  LET denied = SIMULATE HTTP SOURCE app.http.callback(ROW(method => 'GET',
+    headers => MAP('Cookie' => cookie), raw_query =>
+      'state=' || query['state'] || '&error=access_denied', raw_body => NONE));
+  ASSERT denied.status = 202;
+  DRAIN MODULE app WITHIN 100 STEPS;
+  ASSERT (SELECT COUNT(*) FROM TEST STREAM app.api.completions WHERE outcome IS Refused) = 1;
+  ASSERT (SELECT COUNT(*) FROM app.observed) = 0;
+  ASSERT SINK app.api.token DISPATCH COUNT = 0;
+END;

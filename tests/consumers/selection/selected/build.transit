@@ -1,0 +1,2 @@
+EXPORT TARGET default FROM './production.transit';
+EXPORT TEST TARGET tests FROM './future.test.transit';

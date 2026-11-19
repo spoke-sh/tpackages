@@ -1,0 +1,6 @@
+CREATE GUARD scim.require_action(kind TEXT, action TEXT, id OPTION<TEXT>) AS
+  REQUIRE $kind IN ('Users', 'Groups') ELSE 'notFound',
+  REQUIRE OPTION_ALL($id, value => LENGTH(value) > 0 AND LENGTH(value) <= 256 AND NOT CONTAINS(value, '/')) ELSE 'notFound',
+  REQUIRE $policy.allow(CURRENT_OWNER(), $kind, $action, $id);
+CREATE GUARD scim.require_version(version TEXT, expected OPTION<TEXT>) AS
+  REQUIRE OPTION_ALL($expected, value => value = '*' OR value = $version) ELSE 'preconditionFailed';
