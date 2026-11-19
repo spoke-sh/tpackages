@@ -86,7 +86,11 @@ CREATE PUBLIC MODULE Subscriber(binding SCHEMA_BINDING, origin TEXT, allowed_hos
   CREATE DATAFLOW subscriptions.unsubscribe FROM COMMAND (id TEXT) AS request AS BEGIN ATOMIC
     REQUIRE (SELECT ONE owner FROM subscriptions.desired WHERE id = request.id).owner = CURRENT_OWNER() ELSE 'Forbidden';
     UPDATE subscriptions.desired SET active = FALSE WHERE id = request.id;
-    CALL subscriptions.request(request.id, 'unsubscribe');
+    IF IS_PRESENT(SELECT OPTIONAL id FROM subscriptions.leases WHERE id = request.id) THEN
+      CALL subscriptions.request(request.id, 'unsubscribe');
+    ELSE
+      PRODUCE INTO subscriptions.results VALUES (CURRENT_REQUEST_ID(), CURRENT_OWNER(), request.id, 'cancelled_before_verification');
+    END IF;
   END;
   CREATE DATAFLOW subscriptions.renew FROM TIMER EVERY INTERVAL '30s' AS tick AS BEGIN ATOMIC
     FOR expired IN SELECT MANY * FROM subscriptions.expiry WHERE deadline <= NOW() ORDER BY deadline, path LIMIT 100 DO

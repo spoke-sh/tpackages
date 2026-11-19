@@ -30,8 +30,11 @@ CREATE PUBLIC MODULE Mail(binding SCHEMA_BINDING, core MODULE Core, account TEXT
     REQUIRE request.type IN ('Email', 'Mailbox') ELSE 'InvalidType';
     RETURN CALL mail.method(request.type || '/changes', JSON_OBJECT('sinceState', request.state, 'maxChanges', 100));
   END;
+  CREATE DATAFLOW mail.query_changes FROM COMMAND (state TEXT) AS request WITH (continuation = 'durable') AS BEGIN
+    RETURN CALL mail.method('Email/queryChanges', JSON_OBJECT('sinceQueryState', request.state, 'maxChanges', 100));
+  END;
   EXPORT DATAFLOW mail.query AS query;
   EXPORT DATAFLOW mail.get AS get;
   EXPORT DATAFLOW mail.changes AS changes;
-  EXPORT DATAFLOW mail.method AS method;
+  EXPORT DATAFLOW mail.query_changes AS query_changes;
 END;

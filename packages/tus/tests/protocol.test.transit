@@ -9,6 +9,20 @@ TEST 'durable offset survives an interrupted PATCH and cannot be overwritten' US
   ASSERT (CALL application.api.head(upload.id)).offset = 4;
   ASSERT STREAM_COUNT(application.api.results WHERE state = 'complete') = 1;
 END;
+
+TEST 'parallel appends at the same offset commit one prefix and isolate owners' USING MODULES (application) AS BEGIN
+  ACTIVATE TEST MODULE application.api;
+  SET TEST OWNER 'first';
+  LET upload = CALL application.api.create(4, '');
+  CONCURRENT BEGIN
+    CALL application.api.patch(upload.id, 0, TEST_BYTE_STREAM(BYTES_HEX('0102'))) CAPTURE AS first;
+    CALL application.api.patch(upload.id, 0, TEST_BYTE_STREAM(BYTES_HEX('0304'))) CAPTURE AS second;
+  END;
+  ASSERT COUNT_SUCCESSES([first, second]) = 1;
+  ASSERT (CALL application.api.head(upload.id)).offset = 2;
+  SET TEST OWNER 'second';
+  ASSERT CALL application.api.head(upload.id) FAILS;
+END;
 TEST 'termination fences pending bytes and expiry refuses stale access' USING MODULES (application) AS BEGIN
   ACTIVATE TEST MODULE application.api;
   LET upload = CALL application.api.create(4, '');
