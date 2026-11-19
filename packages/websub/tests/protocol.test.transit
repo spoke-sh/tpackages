@@ -1,0 +1,17 @@
+IMPORT source FROM '../src/discovery.transit';
+LET discovery = USE source.Discovery();
+TEST 'HTTP discovery takes precedence over body content' AS BEGIN
+  LET links = discovery.links(MAP('Link' => '<https://hub.example.test/>; rel="hub", <https://publisher.example.test/feed>; rel="self"'), UTF8_ENCODE('<html></html>'), 'text/html', 'https://publisher.example.test/feed');
+  ASSERT links.topic = 'https://publisher.example.test/feed';
+  ASSERT links.hubs = ['https://hub.example.test/'];
+END;
+TEST 'unsolicited verification and unsafe challenge reflection refuse' AS BEGIN
+  ACTIVATE TEST MODULE application.api;
+  ASSERT CALL application.api.verify('/websub/unknown', 'subscribe', 'https://publisher.example.test/feed', 'challenge', 600) FAILS;
+  ASSERT STREAM_COUNT(application.api.results) = 0;
+END;
+TEST 'discovery refuses credentials crossing an unapproved destination' AS BEGIN
+  ACTIVATE TEST MODULE application.api;
+  ASSERT CALL application.api.discover('https://unapproved.example.test/feed') FAILS WITH 'DestinationDenied';
+  ASSERT EFFECT_COUNT(application.api) = 0;
+END;

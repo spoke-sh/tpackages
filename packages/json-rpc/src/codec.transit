@@ -1,0 +1,25 @@
+CREATE PUBLIC MODULE Codec() AS BEGIN
+  CREATE PUBLIC FUNCTION error(id JSON, code BIGINT, message TEXT) RETURNS JSON AS BEGIN
+    RETURN JSON_OBJECT('jsonrpc', '2.0', 'id', $id, 'error', JSON_OBJECT('code', $code, 'message', $message));
+  END;
+  CREATE PUBLIC FUNCTION request(value JSON) RETURNS ROW(id OPTION<JSON>, method TEXT, params JSON) AS BEGIN
+    REQUIRE JSON_TYPE($value) = 'object' AND JSON_STRING($value, 'jsonrpc') = '2.0'
+      AND JSON_TYPE(JSON_GET($value, 'method')) = 'string' ELSE 'InvalidRequest';
+    LET id = JSON_OPTION($value, 'id');
+    REQUIRE OPTION_ALL(id, value => JSON_TYPE(value) IN ('string', 'number', 'null')) ELSE 'InvalidRequest';
+    LET params = COALESCE(JSON_OPTION($value, 'params'), JSON '{}');
+    REQUIRE JSON_TYPE(params) IN ('object', 'array') ELSE 'InvalidParams';
+    RETURN ROW(id => id, method => JSON_STRING($value, 'method'), params => params);
+  END;
+  CREATE PUBLIC FUNCTION response(value JSON, expected JSON) RETURNS JSON AS BEGIN
+    REQUIRE JSON_TYPE($value) = 'object' AND JSON_STRING($value, 'jsonrpc') = '2.0'
+      AND JSON_GET($value, 'id') = $expected ELSE 'InvalidResponse';
+    REQUIRE JSON_HAS($value, 'result') <> JSON_HAS($value, 'error') ELSE 'InvalidResponse';
+    IF JSON_HAS($value, 'error') THEN
+      LET problem = JSON_GET($value, 'error');
+      REQUIRE JSON_TYPE(problem) = 'object' AND JSON_IS_INTEGER(JSON_GET(problem, 'code'))
+        AND JSON_TYPE(JSON_GET(problem, 'message')) = 'string' ELSE 'InvalidResponse';
+    END IF;
+    RETURN $value;
+  END;
+END;

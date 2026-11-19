@@ -1,0 +1,37 @@
+IMPORT wire FROM './codec.transit';
+CREATE PUBLIC MODULE Server(binding SCHEMA_BINDING, methods COMMAND_BINDINGS) AS BEGIN
+  BIND SCHEMA rpc TO $binding;
+  LET codec = USE wire.Codec();
+  CREATE DATAFLOW rpc.member FROM COMMAND (value JSON) AS request WITH (continuation = 'durable') AS BEGIN
+    LET parsed = TRY codec.request(request.value);
+    IF parsed IS ERR THEN
+      RETURN SOME(codec.error(JSON 'null', -32600, 'Invalid Request'));
+    END IF;
+    LET call = REQUIRE_OK(parsed);
+    LET result = CASE WHEN STARTS_WITH(call.method, 'rpc.') OR NOT HAS_COMMAND($methods, call.method)
+      THEN ERR(ROW(code => -32601, message => 'Method not found'))
+      ELSE DISPATCH COMMAND $methods NAMED call.method PARAMETERS call.params
+        OWNER CURRENT_OWNER() DEADLINE NOW() + SECONDS(30) ERRORS AS JSON_RPC_ERRORS END;
+    IF NOT IS_PRESENT(call.id) THEN RETURN NONE; END IF;
+    RETURN SOME(MATCH result
+      WHEN OK(value) THEN JSON_OBJECT('jsonrpc', '2.0', 'id', REQUIRE_SOME(call.id), 'result', value)
+      WHEN ERR(problem) THEN codec.error(REQUIRE_SOME(call.id), problem.code, problem.message) END);
+  END;
+  CREATE DATAFLOW rpc.receive FROM COMMAND (body BYTES) AS request WITH (continuation = 'durable') AS BEGIN
+    LET parsed = TRY JSON_PARSE(request.body, max_bytes => 1048576, max_depth => 32, duplicate_keys => 'reject');
+    IF parsed IS ERR THEN RETURN SOME(codec.error(JSON 'null', -32700, 'Parse error')); END IF;
+    LET value = REQUIRE_OK(parsed);
+    IF JSON_TYPE(value) <> 'array' THEN RETURN CALL rpc.member(value); END IF;
+    LET members = JSON_AS_ARRAY(value);
+    IF LENGTH(members) = 0 THEN RETURN SOME(codec.error(JSON 'null', -32600, 'Invalid Request')); END IF;
+    REQUIRE LENGTH(members) <= 128 ELSE 'BatchTooLarge';
+    VAR results = LIST<JSON>();
+    -- Each child command has its own transaction and native continuation ID.
+    FOR member IN members DO
+      LET result = CALL rpc.member(member);
+      IF IS_PRESENT(result) THEN SET results = APPEND(results, REQUIRE_SOME(result)); END IF;
+    END FOR;
+    RETURN CASE WHEN LENGTH(results) = 0 THEN NONE ELSE SOME(JSON_FROM_LIST(results)) END;
+  END;
+  EXPORT DATAFLOW rpc.receive AS receive;
+END;

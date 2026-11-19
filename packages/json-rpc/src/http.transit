@@ -1,0 +1,10 @@
+CREATE PUBLIC INTERFACE Server AS BEGIN DATAFLOW receive(body BYTES) RETURNS OPTION<JSON>; END;
+CREATE PUBLIC MODULE Http(binding SCHEMA_BINDING, api MODULE Server, path TEXT) AS BEGIN
+  BIND SCHEMA transport TO $binding;
+  CREATE SOURCE transport.rpc FROM HTTP REQUEST AS request INTO COMMAND $api.receive(HTTP_BODY(request))
+    WITH (method = 'POST', path = $path, authentication = 'application', max_body_bytes = 1048576,
+      response_status = CASE WHEN IS_PRESENT(RESULT) THEN 200 ELSE 204 END, response_body = RESULT,
+      response_headers = MAP('Content-Type' => 'application/json'), response_cache = 'no-store',
+      response_deadline = '30s', request_storage = 'protected_transient', capture = 'redacted_metadata',
+      refusal_status = MAP('BatchTooLarge' => 413));
+END;

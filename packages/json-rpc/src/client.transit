@@ -1,0 +1,57 @@
+IMPORT wire FROM './codec.transit';
+CREATE PUBLIC MODULE Client(binding SCHEMA_BINDING, endpoint TEXT, authorization HTTP_AUTH_CAPABILITY) AS BEGIN
+  BIND SCHEMA rpc TO $binding;
+  REQUIRE HTTPS_URL($endpoint, SET(URL_HOST($endpoint))) ELSE 'InvalidEndpoint';
+  LET codec = USE wire.Codec();
+  CREATE PRIVATE TABLE rpc.calls (id TEXT PRIMARY KEY, owner OWNER, body PROTECTED_REF, notification BOOLEAN, state TEXT, result OPTION<PROTECTED_REF>);
+  CREATE PRIVATE QUEUE rpc.jobs (id TEXT, owner OWNER) WITH (max_attempts = 1);
+  CREATE PRIVATE STREAM rpc.results (event_id TEXT, owner OWNER, state TEXT)
+    WITH (retention = 'unlimited', partition_by = 'owner', disclosure = 'current_owner');
+  CREATE SINK rpc.http INTO HTTP WITH (endpoint = $endpoint, method = 'POST', authorization = $authorization,
+    request_encoding = 'bytes', response = 'protected_bytes', response_max_bytes = 1048576, request_timeout = '30s',
+    follow_redirects = FALSE, allowed_hosts = SET(URL_HOST($endpoint)), max_attempts = 1, unknown_outcome = 'retain', capture = 'redacted_metadata');
+  CREATE DATAFLOW rpc.call FROM COMMAND (method TEXT, params JSON, notification BOOLEAN) AS request
+    WITH (idempotency = 'original_owner_request') AS BEGIN ATOMIC
+    REQUIRE NOT STARTS_WITH(request.method, 'rpc.') AND JSON_TYPE(request.params) IN ('array', 'object') ELSE 'InvalidRequest';
+    LET id = OPERATION_ID(CURRENT_REQUEST_ID(), 'rpc');
+    LET base = JSON_OBJECT('jsonrpc', '2.0', 'method', request.method, 'params', request.params);
+    LET body = CASE WHEN request.notification THEN base ELSE JSON_SET(base, 'id', JSON_FROM(id)) END;
+    INSERT INTO rpc.calls VALUES (id, CURRENT_OWNER(), PROTECT(JSON_ENCODE(body), 'rpc.request', INFINITY), request.notification, 'pending', NONE);
+    ENQUEUE INTO rpc.jobs VALUES (id, CURRENT_OWNER());
+    RETURN id;
+  END;
+  CREATE DATAFLOW rpc.dispatch FROM QUEUE rpc.jobs AS job AS BEGIN
+    LET call = SELECT ONE * FROM rpc.calls WHERE id = job.id AND owner = CURRENT_OWNER();
+    IF call.state <> 'pending' THEN RETURN; END IF;
+    LET receipt = EXECUTE SINK rpc.http EFFECT job.id HEADERS MAP('Content-Type' => 'application/json')
+      BODY UNPROTECT(call.body, 'rpc.request') ON REPLAY OBSERVE ONLY;
+    BEGIN ATOMIC
+      VAR state = CASE WHEN receipt.outcome = 'unknown' THEN 'unknown' ELSE 'refused' END;
+      VAR result = NONE;
+      IF receipt.outcome = 'known' AND receipt.status BETWEEN 200 AND 299 THEN
+        IF call.notification THEN
+          REQUIRE LENGTH(receipt.body) = 0 ELSE 'UnexpectedNotificationResponse';
+          SET state = 'acknowledged';
+        ELSE
+          LET value = codec.response(JSON_PARSE_PROTECTED(receipt.body, max_bytes => 1048576, max_depth => 32, duplicate_keys => 'reject'), JSON_FROM(job.id));
+          SET state = CASE WHEN JSON_HAS(value, 'error') THEN 'remote_error' ELSE 'completed' END;
+          SET result = SOME(PROTECT(value, 'rpc.result', INFINITY));
+        END IF;
+      END IF;
+      UPDATE rpc.calls SET state = state, result = result WHERE id = job.id AND state = 'pending';
+      PRODUCE INTO rpc.results VALUES (job.id, job.owner, state);
+    END;
+  ON FAILURE failure
+    BEGIN ATOMIC
+      UPDATE rpc.calls SET state = 'invalid_response' WHERE id = job.id AND state = 'pending';
+      PRODUCE INTO rpc.results VALUES (job.id, job.owner, 'invalid_response');
+    END;
+  END;
+  CREATE DATAFLOW rpc.read FROM COMMAND (id TEXT) AS request AS BEGIN ATOMIC
+    LET call = SELECT ONE * FROM rpc.calls WHERE id = request.id AND owner = CURRENT_OWNER();
+    RETURN ROW(state => call.state, result => OPTION_MAP(call.result, value => UNPROTECT(value, 'rpc.result')));
+  END;
+  EXPORT DATAFLOW rpc.call AS call;
+  EXPORT DATAFLOW rpc.read AS read;
+  EXPORT STREAM rpc.results AS results;
+END;

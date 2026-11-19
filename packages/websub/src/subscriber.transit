@@ -1,0 +1,102 @@
+IMPORT discovery FROM './discovery.transit';
+CREATE PUBLIC MODULE Subscriber(binding SCHEMA_BINDING, origin TEXT, allowed_hosts SET<TEXT>) AS BEGIN
+  BIND SCHEMA subscriptions TO $binding;
+  REQUIRE HTTPS_ORIGIN($origin) ELSE 'InvalidOrigin';
+  LET discover = USE discovery.Discovery();
+  CREATE PRIVATE DOCUMENT subscriptions.desired (id TEXT PRIMARY KEY, owner OWNER, topic TEXT, hub TEXT, active BOOLEAN) WITH (profile = 'versioned');
+  CREATE PRIVATE KV subscriptions.pending (ROW(id TEXT, owner OWNER, generation TEXT, topic TEXT, mode TEXT, secret PROTECTED_REF, deadline TIMESTAMP));
+  CREATE PRIVATE TABLE subscriptions.leases (id TEXT PRIMARY KEY, owner OWNER, generation TEXT, callback TEXT, secret PROTECTED_REF, expires TIMESTAMP, renew_at TIMESTAMP, state TEXT);
+  CREATE PRIVATE QUEUE subscriptions.requests (id TEXT, owner OWNER, generation TEXT, mode TEXT, policy_revision REVISION, callback TEXT, secret PROTECTED_REF) WITH (max_attempts = 1);
+  CREATE PRIVATE TABLE subscriptions.content (id TEXT PRIMARY KEY, owner OWNER, payload PROTECTED_REF, media_type TEXT);
+  CREATE PRIVATE STREAM subscriptions.results (event_id TEXT, owner OWNER, subscription TEXT, kind TEXT)
+    WITH (retention = 'unlimited', partition_by = 'subscription', disclosure = 'current_owner');
+  CREATE SINK subscriptions.http INTO HTTP WITH (dynamic_endpoint = TRUE, allowed_hosts = $allowed_hosts,
+    response = 'protected_bytes', response_max_bytes = 1048576, follow_redirects = FALSE, max_attempts = 1,
+    request_timeout = '15s', capture = 'redacted_metadata', unknown_outcome = 'retain');
+  CREATE DATAFLOW subscriptions.discover FROM COMMAND (url TEXT) AS request WITH (continuation = 'durable') AS BEGIN
+    REQUIRE HTTPS_URL(request.url, $allowed_hosts) ELSE 'DestinationDenied';
+    LET result = EXECUTE SINK subscriptions.http EFFECT CURRENT_REQUEST_ID() METHOD 'GET' ENDPOINT request.url ON REPLAY OBSERVE ONLY;
+    REQUIRE result.outcome = 'known' AND result.status = 200 ELSE 'DiscoveryFailed';
+    LET found = discover.links(result.headers, result.body, HTTP_FIELD_UNIQUE(result.headers, 'Content-Type'), request.url);
+    REQUIRE HTTPS_URL(found.topic, $allowed_hosts) AND ALL(found.hubs, hub => HTTPS_URL(hub, $allowed_hosts)) ELSE 'DestinationDenied';
+    RETURN found;
+  END;
+  CREATE PROCEDURE subscriptions.request(id TEXT, mode TEXT) AS BEGIN ATOMIC
+    LET desired = SELECT ONE * FROM subscriptions.desired WHERE id = $id;
+    LET generation = NEW_ID();
+    LET callback = $origin || '/websub/' || RANDOM_TOKEN(32);
+    LET secret = PROTECT(RANDOM_SECRET(32), 'websub.secret', INFINITY);
+    PUT INTO subscriptions.pending KEY URL_PATH(callback) VALUE ROW(id => $id, owner => desired.owner, generation => generation,
+      topic => desired.topic, mode => $mode, secret => secret, deadline => NOW() + SECONDS(600)) IF ABSENT;
+    ENQUEUE INTO subscriptions.requests VALUES ($id, desired.owner, generation, $mode, DOCUMENT_REVISION(subscriptions.desired, $id), callback, secret);
+  END;
+  CREATE DATAFLOW subscriptions.subscribe FROM COMMAND (topic TEXT, hub TEXT) AS request
+    WITH (idempotency = 'original_owner_request') AS BEGIN ATOMIC
+    REQUIRE HTTPS_URL(request.topic, $allowed_hosts) AND HTTPS_URL(request.hub, $allowed_hosts) ELSE 'DestinationDenied';
+    LET id = OPERATION_ID(CURRENT_REQUEST_ID(), 'subscription');
+    INSERT INTO subscriptions.desired VALUES (id, CURRENT_OWNER(), request.topic, request.hub, TRUE);
+    CALL subscriptions.request(id, 'subscribe');
+    RETURN id;
+  END;
+  CREATE DATAFLOW subscriptions.send FROM QUEUE subscriptions.requests AS job AS BEGIN
+    LET desired = SELECT ONE * FROM subscriptions.desired WHERE id = job.id AND owner = CURRENT_OWNER();
+    REQUIRE DOCUMENT_REVISION(subscriptions.desired, job.id) = job.policy_revision ELSE 'ConfigurationChanged';
+    LET result = EXECUTE SINK subscriptions.http EFFECT job.generation METHOD 'POST' ENDPOINT desired.hub
+      GUARD DOCUMENT_REVISION(subscriptions.desired, job.id) = job.policy_revision
+      FIELDS MAP('hub.mode' => job.mode, 'hub.topic' => desired.topic, 'hub.callback' => job.callback,
+        'hub.lease_seconds' => '86400', 'hub.secret' => UNPROTECT(job.secret, 'websub.secret')) ON REPLAY OBSERVE ONLY;
+    BEGIN ATOMIC
+      PRODUCE INTO subscriptions.results VALUES (job.generation || ':requested', job.owner, job.id,
+        CASE WHEN result.outcome = 'unknown' THEN 'request_unknown' WHEN result.status = 202 THEN 'awaiting_verification' ELSE 'request_refused' END);
+    END;
+  END;
+  CREATE DATAFLOW subscriptions.verify FROM COMMAND (path TEXT, mode TEXT, topic TEXT, challenge TEXT, seconds BIGINT) AS request AS BEGIN ATOMIC
+    LET pending = REQUIRE_SOME(GET FROM subscriptions.pending KEY request.path);
+    REQUIRE pending.value.deadline > NOW() AND pending.value.owner = CURRENT_OWNER() AND pending.value.topic = request.topic
+      AND pending.value.mode = request.mode AND request.seconds BETWEEN 1 AND 864000
+      AND REGEX_MATCH(request.challenge, '^[\x20-\x7e]{1,1024}$') ELSE 'InvalidVerification';
+    LET desired = SELECT ONE * FROM subscriptions.desired WHERE id = pending.value.id;
+    REQUIRE desired.active = (request.mode = 'subscribe') ELSE 'SubscriptionChanged';
+    IF request.mode = 'subscribe' THEN
+      UPSERT INTO subscriptions.leases VALUES (pending.value.id, pending.value.owner, pending.value.generation,
+        request.path, pending.value.secret, NOW() + SECONDS(request.seconds), NOW() + SECONDS(MAX(1, request.seconds * 4 / 5)), 'active');
+    ELSE
+      UPDATE subscriptions.leases SET state = 'cancelled' WHERE id = pending.value.id;
+    END IF;
+    DELETE FROM subscriptions.pending KEY request.path IF REVISION = pending.revision;
+    PRODUCE INTO subscriptions.results VALUES (pending.value.generation || ':verified', CURRENT_OWNER(), pending.value.id, request.mode);
+    RETURN request.challenge;
+  END;
+  CREATE DATAFLOW subscriptions.receive FROM COMMAND (path TEXT, signature TEXT, content_type TEXT, body SECRET<BYTES>) AS request AS BEGIN ATOMIC
+    LET lease = SELECT ONE * FROM subscriptions.leases WHERE callback = request.path AND owner = CURRENT_OWNER();
+    REQUIRE lease.state = 'active' AND lease.expires > NOW() AND (SELECT ONE active FROM subscriptions.desired WHERE id = lease.id).active ELSE 'LeaseInactive';
+    LET parts = SPLIT(request.signature, '=');
+    REQUIRE LENGTH(parts) = 2 AND parts[0] IN ('sha256', 'sha384', 'sha512') ELSE 'UnsupportedSignature';
+    REQUIRE LENGTH(request.body) <= 1048576 AND CONSTANT_TIME_EQUAL(HEX_DECODE(parts[1]), HMAC(parts[0], UNPROTECT(lease.secret, 'websub.secret'), request.body)) ELSE 'InvalidSignature';
+    LET id = OPERATION_ID(CURRENT_REQUEST_ID(), 'content');
+    INSERT INTO subscriptions.content VALUES (id, CURRENT_OWNER(), PROTECT(request.body, 'websub.content', INFINITY), request.content_type);
+    PRODUCE INTO subscriptions.results VALUES (id, CURRENT_OWNER(), lease.id, 'content');
+  END;
+  CREATE DATAFLOW subscriptions.unsubscribe FROM COMMAND (id TEXT) AS request AS BEGIN ATOMIC
+    REQUIRE (SELECT ONE owner FROM subscriptions.desired WHERE id = request.id).owner = CURRENT_OWNER() ELSE 'Forbidden';
+    UPDATE subscriptions.desired SET active = FALSE WHERE id = request.id;
+    CALL subscriptions.request(request.id, 'unsubscribe');
+  END;
+  CREATE DATAFLOW subscriptions.renew FROM TIMER EVERY INTERVAL '30s' AS tick AS BEGIN ATOMIC
+    FOR lease IN SELECT MANY * FROM subscriptions.leases WHERE state = 'active' AND renew_at <= NOW() ORDER BY renew_at, id LIMIT 100 DO
+      IF (SELECT ONE active FROM subscriptions.desired WHERE id = lease.id).active THEN CALL subscriptions.request(lease.id, 'subscribe'); END IF;
+      UPDATE subscriptions.leases SET renew_at = NOW() + SECONDS(600) WHERE id = lease.id;
+    END FOR;
+  END;
+  CREATE DATAFLOW subscriptions.read FROM COMMAND (id TEXT) AS request AS BEGIN ATOMIC
+    LET record = SELECT ONE * FROM subscriptions.content WHERE id = request.id AND owner = CURRENT_OWNER();
+    RETURN ROW(body => UNPROTECT(record.payload, 'websub.content'), media_type => record.media_type);
+  END;
+  EXPORT DATAFLOW subscriptions.discover AS discover;
+  EXPORT DATAFLOW subscriptions.subscribe AS subscribe;
+  EXPORT DATAFLOW subscriptions.unsubscribe AS unsubscribe;
+  EXPORT DATAFLOW subscriptions.verify AS verify;
+  EXPORT DATAFLOW subscriptions.receive AS receive;
+  EXPORT DATAFLOW subscriptions.read AS read;
+  EXPORT STREAM subscriptions.results AS results;
+END;

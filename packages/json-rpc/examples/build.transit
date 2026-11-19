@@ -1,0 +1,10 @@
+IMPORT library FROM '../build.transit';
+
+EXPORT MODULE Application() AS BEGIN
+  LET api = USE library.Server(SCHEMA_BINDING('example_rpc'), COMMAND_BINDINGS('echo' => COMMAND (value TEXT) RETURNS TEXT AS BEGIN ATOMIC RETURN value; END));
+  AUTHORIZE MODULE api WITH (commands = ROLE SETTING('example.command_role'), state = ROLE SETTING('example.state_role'), effects = ROLE SETTING('example.effect_role'), reads = ROLE SETTING('example.read_role'), maintenance = ROLE SETTING('example.maintenance_role'));
+  ACTIVATE MODULE api;
+  EXPORT MODULE api AS api;
+END;
+LET application = USE Application();
+EXPORT TARGET default AS SQL OF application;

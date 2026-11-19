@@ -1,0 +1,3 @@
+IMPORT example FROM '../examples/build.transit';
+LET application = USE example.Application();
+EXPORT TEST TARGET tests AS TESTS OF application USING SUITES ('./protocol.test.transit');

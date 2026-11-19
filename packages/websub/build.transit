@@ -1,0 +1,5 @@
+EXPORT MODULE Discovery FROM './src/discovery.transit';
+EXPORT MODULE Subscriber FROM './src/subscriber.transit';
+EXPORT MODULE Http FROM './src/http.transit';
+EXPORT TARGET default FROM './examples/build.transit';
+EXPORT TEST TARGET tests FROM './tests/build.transit';
