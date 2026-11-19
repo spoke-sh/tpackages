@@ -123,6 +123,12 @@ such as `sessions`, `audit`, or `webhooks` is insufficient on its own. A webhook
 package would need a defined wire contract, such as
 [Standard Webhooks](https://github.com/standard-webhooks/standard-webhooks/blob/main/spec/standard-webhooks.md).
 
+The draft [application protocol expansion plan](../docs/application-protocol-plan.md)
+defines first profiles for `cloudevents`, `standard-webhooks`, `tus`, `json-rpc`,
+`websub`, `caldav`, `carddav`, `jmap`, and `activitypub`. It proposes `webdav`,
+`icalendar`, and `vcard` as supporting roots, with independent module selection.
+These additions are planned, not implemented. MCP and frontend hosting are excluded.
+
 Write against Transit's target transport, effect, secret, and durable-state
 capabilities, documenting unsupported constructs as compiler/runtime requirements.
 Use established cryptographic implementations through native primitives for

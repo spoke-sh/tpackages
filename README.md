@@ -43,6 +43,12 @@ are optional selected modules. The [API and state migration map](docs/refactor-c
 [compiler requirement ledger](docs/compiler-requirements.md) make the upstream
 work needed to execute these packages explicit.
 
+The draft [application protocol expansion plan](docs/application-protocol-plan.md)
+covers CloudEvents, Standard Webhooks, tus, JSON-RPC, WebSub, CalDAV, CardDAV, JMAP,
+and ActivityPub, with shared DAV and format support. It defines proposed profiles,
+dataflows, state ownership, delivery phases, and qualification gates. MCP and
+frontend hosting are excluded.
+
 | Owner | Responsibility |
 | --- | --- |
 | Transit runtime | Execution, durable state, secrets, transport capabilities, and authorized effects. |
