@@ -1,0 +1,20 @@
+TEST 'durable offset survives an interrupted PATCH and cannot be overwritten' AS BEGIN
+  ACTIVATE TEST MODULE application.api;
+  LET upload = CALL application.api.create(4, 'name ZmlsZQ==');
+  ASSERT CALL application.api.patch(upload.id, 0, TEST_BYTE_STREAM(BYTES_HEX('0102'), interrupt_after => 2)) FAILS WITH 'BodyInterrupted';
+  ASSERT (CALL application.api.head(upload.id)).offset = 2;
+  ASSERT CALL application.api.patch(upload.id, 0, TEST_BYTE_STREAM(BYTES_HEX('0304'))) FAILS WITH 'OffsetConflict';
+  CALL application.api.patch(upload.id, 2, TEST_BYTE_STREAM(BYTES_HEX('0304')));
+  ASSERT (CALL application.api.head(upload.id)).offset = 4;
+  ASSERT STREAM_COUNT(application.api.results WHERE state = 'complete') = 1;
+END;
+TEST 'termination fences pending bytes and expiry refuses stale access' AS BEGIN
+  ACTIVATE TEST MODULE application.api;
+  LET upload = CALL application.api.create(4, '');
+  CALL application.api.terminate(upload.id);
+  ASSERT CALL application.api.patch(upload.id, 0, TEST_BYTE_STREAM(BYTES_HEX('01020304'))) FAILS WITH 'UploadGone';
+  LET empty = CALL application.api.create(0, '');
+  ASSERT STREAM_COUNT(application.api.results WHERE state = 'complete') = 1;
+  ADVANCE TEST CLOCK BY INTERVAL '3601s';
+  ASSERT CALL application.api.head(empty.id) FAILS WITH 'UploadGone';
+END;

@@ -1,0 +1,82 @@
+CREATE PUBLIC MODULE Server(binding SCHEMA_BINDING, storage BLOB_STORE, max_bytes BIGINT, lifetime_seconds BIGINT) AS BEGIN
+  BIND SCHEMA uploads TO $binding;
+  REQUIRE $max_bytes > 0 AND $lifetime_seconds BETWEEN 60 AND 604800 ELSE 'InvalidConfiguration';
+  CREATE PRIVATE DOCUMENT uploads.metadata (id TEXT PRIMARY KEY, fields MAP<TEXT, BYTES>) WITH (profile = 'versioned');
+  CREATE PRIVATE TABLE uploads.files (id TEXT PRIMARY KEY, owner OWNER, blob BLOB_REF, size BIGINT, expires TIMESTAMP, state TEXT, fence BIGINT);
+  CREATE PRIVATE STREAM uploads.results (event_id TEXT, owner OWNER, upload TEXT, state TEXT)
+    WITH (retention = 'unlimited', partition_by = 'upload', disclosure = 'current_owner');
+  CREATE PUBLIC FUNCTION metadata(header TEXT) RETURNS MAP<TEXT, BYTES> AS BEGIN
+    REQUIRE LENGTH($header) <= 8192 ELSE 'InvalidMetadata';
+    VAR result = MAP<TEXT, BYTES>();
+    IF $header = '' THEN RETURN result; END IF;
+    FOR item IN SPLIT($header, ',') DO
+      LET pair = SPLIT(TRIM(item), ' ');
+      REQUIRE LENGTH(pair) BETWEEN 1 AND 2 AND REGEX_MATCH(pair[0], '^[^ ,\x00-\x1f\x7f]+$') AND NOT MAP_HAS(result, pair[0]) ELSE 'InvalidMetadata';
+      SET result = MAP_SET(result, pair[0], CASE WHEN LENGTH(pair) = 1 THEN BYTES '' ELSE BASE64_DECODE_STRICT(pair[1]) END);
+    END FOR;
+    RETURN result;
+  END;
+  CREATE DATAFLOW uploads.create FROM COMMAND (length BIGINT, metadata_header TEXT) AS request
+    WITH (idempotency = 'original_owner_request') AS BEGIN ATOMIC
+    REQUIRE request.length BETWEEN 0 AND $max_bytes ELSE 'UploadTooLarge';
+    LET fields = metadata(request.metadata_header);
+    LET id = OPERATION_ID(CURRENT_REQUEST_ID(), 'upload');
+    LET expiry = NOW() + SECONDS($lifetime_seconds);
+    LET blob = BLOB_CREATE($storage, id, CURRENT_OWNER(), request.length, expiry);
+    INSERT INTO uploads.metadata VALUES (id, fields);
+    INSERT INTO uploads.files VALUES (id, CURRENT_OWNER(), blob, request.length, expiry,
+      CASE WHEN request.length = 0 THEN 'complete' ELSE 'open' END, 1);
+    IF request.length = 0 THEN PRODUCE INTO uploads.results VALUES (id || ':complete', CURRENT_OWNER(), id, 'complete'); END IF;
+    RETURN ROW(id => id, expires => expiry);
+  END;
+  CREATE DATAFLOW uploads.head FROM COMMAND (id TEXT) AS request AS BEGIN ATOMIC
+    LET file = SELECT ONE * FROM uploads.files WHERE id = request.id AND owner = CURRENT_OWNER();
+    REQUIRE file.state IN ('open', 'complete') AND file.expires > NOW() ELSE 'UploadGone';
+    RETURN ROW(offset => BLOB_DURABLE_OFFSET(file.blob), length => file.size, expires => file.expires,
+      metadata => (SELECT ONE fields FROM uploads.metadata WHERE id = request.id).fields);
+  END;
+  CREATE DATAFLOW uploads.patch FROM COMMAND (id TEXT, offset BIGINT, body BYTE_STREAM) AS request
+    WITH (idempotency = 'original_owner_request', continuation = 'durable') AS BEGIN
+    LET file = SELECT ONE * FROM uploads.files WHERE id = request.id AND owner = CURRENT_OWNER();
+    REQUIRE file.state = 'open' AND file.expires > NOW() ELSE 'UploadGone';
+    REQUIRE request.offset = BLOB_DURABLE_OFFSET(file.blob) ELSE 'OffsetConflict';
+    LET receipt = EXECUTE BLOB APPEND file.blob EFFECT CURRENT_REQUEST_ID()
+      EXPECT OFFSET request.offset MAX LENGTH file.size - request.offset
+      GUARD ROW uploads.files KEY file.id FENCE file.fence STATE 'open' EXPIRES file.expires
+      BODY request.body ON REPLAY OBSERVE ONLY;
+    -- The native append owner atomically fences each accepted byte range against
+    -- termination/expiry. Disconnect can commit a prefix and must report it on HEAD.
+    REQUIRE receipt.outcome <> 'unknown' ELSE 'WriteUnknown';
+    BEGIN ATOMIC
+      LET current = SELECT ONE * FROM uploads.files WHERE id = file.id AND owner = CURRENT_OWNER();
+      REQUIRE current.fence = file.fence AND current.state = 'open' AND current.expires > NOW() ELSE 'UploadGone';
+      LET offset = BLOB_DURABLE_OFFSET(current.blob);
+      IF offset = current.size THEN
+        UPDATE uploads.files SET state = 'complete' WHERE id = file.id;
+        PRODUCE INTO uploads.results VALUES (file.id || ':complete', CURRENT_OWNER(), file.id, 'complete');
+      END IF;
+      REQUIRE receipt.complete_request ELSE 'BodyInterrupted';
+      RETURN ROW(offset => offset, expires => current.expires);
+    END;
+  END;
+  CREATE DATAFLOW uploads.terminate FROM COMMAND (id TEXT) AS request
+    WITH (idempotency = 'original_owner_request') AS BEGIN ATOMIC
+    LET file = SELECT ONE * FROM uploads.files WHERE id = request.id AND owner = CURRENT_OWNER();
+    REQUIRE file.state IN ('open', 'complete') ELSE 'UploadGone';
+    BLOB_FENCE_AND_RETIRE(file.blob, file.fence);
+    UPDATE uploads.files SET state = 'terminated', fence = fence + 1 WHERE id = file.id;
+    PRODUCE INTO uploads.results VALUES (file.id || ':terminated', CURRENT_OWNER(), file.id, 'terminated');
+  END;
+  CREATE DATAFLOW uploads.expire FROM TIMER EVERY INTERVAL '60s' AS tick AS BEGIN ATOMIC
+    FOR file IN SELECT MANY * FROM uploads.files WHERE expires <= NOW() AND state IN ('open', 'complete') ORDER BY expires, id LIMIT 100 DO
+      BLOB_FENCE_AND_RETIRE(file.blob, file.fence);
+      UPDATE uploads.files SET state = 'expired', fence = fence + 1 WHERE id = file.id;
+      PRODUCE INTO uploads.results VALUES (file.id || ':expired', file.owner, file.id, 'expired');
+    END FOR;
+  END;
+  EXPORT DATAFLOW uploads.create AS create;
+  EXPORT DATAFLOW uploads.head AS head;
+  EXPORT DATAFLOW uploads.patch AS patch;
+  EXPORT DATAFLOW uploads.terminate AS terminate;
+  EXPORT STREAM uploads.results AS results;
+END;
