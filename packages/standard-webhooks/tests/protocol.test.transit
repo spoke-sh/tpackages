@@ -28,7 +28,7 @@ TEST 'an ambiguous native attempt is observed once before permitted redelivery' 
   ACTIVATE TEST MODULE sender;
   SET TEST SECRET 'example.webhook.key' TO BYTES_HEX(REPEAT('11',32));
   MOCK SINK sender.http RETURNS OUTCOME 'unknown';
-  LET id = CALL sender.send(SECRET_LITERAL(UTF8_ENCODE('event')));
+  LET id = CALL sender.send(SECRET_LITERAL(UTF8_ENCODE('event')), 'application/octet-stream');
   CRASH AFTER DISPATCH sender.http;
   DRAIN MODULE sender WITHIN 100 STEPS;
   RESTART;

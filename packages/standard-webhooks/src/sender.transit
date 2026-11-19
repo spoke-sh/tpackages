@@ -5,7 +5,7 @@ CREATE PUBLIC MODULE Sender(binding SCHEMA_BINDING, endpoint_id TEXT, url TEXT, 
   LET signatures = USE signature.Signatures();
   CREATE PRIVATE DOCUMENT sender.policy (id TEXT PRIMARY KEY, enabled BOOLEAN) WITH (profile = 'versioned');
   INSERT INTO sender.policy VALUES ('endpoint', TRUE) ON CONFLICT DO NOTHING;
-  CREATE PRIVATE TABLE sender.deliveries (id TEXT PRIMARY KEY, owner OWNER, payload PROTECTED_REF, deadline TIMESTAMP, status TEXT);
+  CREATE PRIVATE TABLE sender.deliveries (id TEXT PRIMARY KEY, owner OWNER, payload PROTECTED_REF, content_type TEXT, deadline TIMESTAMP, status TEXT);
   CREATE PRIVATE TABLE sender.receipts (delivery TEXT REFERENCES sender.deliveries(id), attempt BIGINT, outcome TEXT, status OPTION<BIGINT>, PRIMARY KEY(delivery, attempt));
   CREATE PRIVATE QUEUE sender.jobs (id TEXT, owner OWNER, attempt BIGINT, signed_at TIMESTAMP) WITH (max_attempts = 1);
   CREATE PRIVATE STREAM sender.results (event_id TEXT, owner OWNER, delivery TEXT, status TEXT)
@@ -13,11 +13,12 @@ CREATE PUBLIC MODULE Sender(binding SCHEMA_BINDING, endpoint_id TEXT, url TEXT, 
   CREATE SINK sender.http INTO HTTP WITH (endpoint = $url, method = 'POST', request_encoding = 'bytes', response = 'bytes',
     response_max_bytes = 4096, request_timeout = '20s', follow_redirects = FALSE, allowed_hosts = SET(URL_HOST($url)),
     capture = 'redacted_metadata', max_attempts = 1, unknown_outcome = 'retain');
-  CREATE DATAFLOW sender.send FROM COMMAND (body SECRET<BYTES>) AS request
+  CREATE DATAFLOW sender.send FROM COMMAND (body SECRET<BYTES>, content_type TEXT) AS request
     WITH (idempotency = 'original_owner_request') AS BEGIN ATOMIC
     REQUIRE LENGTH(request.body) <= 1048576 AND (SELECT ONE enabled FROM sender.policy WHERE id = 'endpoint').enabled ELSE 'DeliveryRefused';
+    REQUIRE MEDIA_TYPE_VALID(request.content_type) ELSE 'InvalidContentType';
     LET id = OPERATION_ID(CURRENT_REQUEST_ID(), 'message');
-    INSERT INTO sender.deliveries VALUES (id, CURRENT_OWNER(), PROTECT(request.body, 'webhook.send', NOW() + DAYS(4)), NOW() + DAYS(3), 'pending');
+    INSERT INTO sender.deliveries VALUES (id, CURRENT_OWNER(), PROTECT(request.body, 'webhook.send', NOW() + DAYS(4)), request.content_type, NOW() + DAYS(3), 'pending');
     ENQUEUE INTO sender.jobs VALUES (id, CURRENT_OWNER(), 0, NOW());
     RETURN id;
   END;
@@ -32,7 +33,7 @@ CREATE PUBLIC MODULE Sender(binding SCHEMA_BINDING, endpoint_id TEXT, url TEXT, 
     LET body = UNPROTECT(delivery.payload, 'webhook.send');
     LET signed = APPEND([signatures.sign($scheme, key, $endpoint_id, job.id, timestamp, body)],
       MAP_LIST(old_keys, previous => signatures.sign($scheme, previous, $endpoint_id, job.id, timestamp, body)));
-    LET headers = MAP('Content-Type' => 'application/octet-stream', 'webhook-id' => job.id, 'webhook-timestamp' => timestamp,
+    LET headers = MAP('Content-Type' => delivery.content_type, 'webhook-id' => job.id, 'webhook-timestamp' => timestamp,
       'webhook-signature' => JOIN(signed, ' '));
     LET result = EXECUTE SINK sender.http EFFECT OPERATION_ID(job.id, CAST(job.attempt AS TEXT))
       GUARD SECRET_CURRENT(key) AND ALL(old_keys, SECRET_CURRENT) AND delivery.deadline > NOW() AND (SELECT ONE enabled FROM sender.policy WHERE id = 'endpoint').enabled

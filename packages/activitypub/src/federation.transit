@@ -122,7 +122,7 @@ CREATE PUBLIC MODULE Federation(binding SCHEMA_BINDING, actor TEXT, owner OWNER,
   CREATE DATAFLOW federation.read FROM COMMAND (id TEXT) AS request AS BEGIN ATOMIC
     LET object = SELECT ONE * FROM federation.objects WHERE id = request.id;
     REQUIRE object.public OR CURRENT_OWNER() = $owner ELSE 'Forbidden';
-    RETURN object.value;
+    RETURN JSON_SET(object.value, '@context', JSON_FROM('https://www.w3.org/ns/activitystreams'));
   END;
   CREATE DATAFLOW federation.collection FROM COMMAND (direction TEXT, after TEXT) AS request AS BEGIN ATOMIC
     REQUIRE request.direction IN ('inbound','outbound') ELSE 'InvalidCollection';
@@ -143,6 +143,7 @@ CREATE PUBLIC MODULE Federation(binding SCHEMA_BINDING, actor TEXT, owner OWNER,
     RETURN JSON_OBJECT('@context', 'https://www.w3.org/ns/activitystreams', 'id', $actor, 'type', 'Service',
       'inbox', $actor || '/inbox', 'outbox', $actor || '/outbox');
   END;
+  CREATE PUBLIC VIEW followers AS SELECT id, actor, state FROM federation.follows WHERE target = $actor AND CURRENT_OWNER() = $owner;
   EXPORT DATAFLOW federation.trust_peer AS trust_peer;
   EXPORT DATAFLOW federation.resolve AS resolve;
   EXPORT DATAFLOW federation.receive AS receive;
