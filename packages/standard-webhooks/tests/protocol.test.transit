@@ -1,6 +1,7 @@
+IMPORT library FROM '../build.transit';
 IMPORT source FROM '../src/signatures.transit';
 LET signatures = USE source.Signatures();
-TEST 'signature input preserves exact body bytes and rejects endpoint confusion' AS BEGIN
+TEST 'signature input preserves exact body bytes and rejects endpoint confusion' USING MODULES (application) AS BEGIN
   SET TEST SECRET 'example.webhook.key' TO BYTES_HEX(REPEAT('11', 32));
   LET key = SECRET('example.webhook.key');
   LET time = CAST(UNIX_SECONDS(NOW()) AS TEXT);
@@ -11,7 +12,36 @@ TEST 'signature input preserves exact body bytes and rejects endpoint confusion'
   ASSERT signatures.verify(headers, SECRET_LITERAL(UTF8_ENCODE('{"a": 1}')), 'endpoint_example', [ROW(scheme => 'v1', key => key)], NOW()) FAILS WITH 'InvalidSignature';
   ASSERT signatures.verify(headers, body, 'endpoint_example', [ROW(scheme => 'v1', key => key)], NOW() + SECONDS(301)) FAILS WITH 'StaleSignature';
 END;
-TEST 'concurrent duplicate intake commits one event and conflicting content refuses' AS BEGIN
+
+-- Apache-2.0 example vector from the pinned Standard Webhooks specification.
+TEST 'published asymmetric vector verifies and refuses another endpoint' USING MODULES (application) AS BEGIN
+  LET body = SECRET_LITERAL(UTF8_ENCODE('{"type":"contact.created","timestamp":"2022-11-03T20:26:10.344522Z","data":{"id":"1f81eb52-5198-4599-803e-771906343485"}}'));
+  LET keys = [ROW(scheme => 'v2a', key => SECRET_LITERAL(BASE64_DECODE_STRICT('uWKK13PfwqyOgrqT0OrWKcS2uVD7e89+oUKnkoPjx7w=')))];
+  LET headers = MAP('webhook-id' => 'msg_2KWPBgLlAfxdpx2AI54pPJ85f4W', 'webhook-timestamp' => '1674087231',
+    'webhook-signature' => 'v2a,kG9XaxZjAEpKB8KeQQb5G1Xp73YH5Rf5gxoWe7cg1kYMiyspdtZXe9w+dAwKeOurAwxfqmlOG/QR4m9s37DzAg==');
+  ASSERT signatures.verify(headers, body, 'ep_2fVZdC8Kx9TR4ZoCqHWt3NnLgRb', keys, TIMESTAMP_FROM_UNIX(1674087231)) = 'msg_2KWPBgLlAfxdpx2AI54pPJ85f4W';
+  ASSERT signatures.verify(headers, body, 'different_endpoint', keys, TIMESTAMP_FROM_UNIX(1674087231)) FAILS WITH 'InvalidSignature';
+END;
+
+TEST 'an ambiguous native attempt is observed once before permitted redelivery' USING MODULES (application) AS BEGIN
+  LET sender = USE library.Sender(SCHEMA_BINDING('sender_recovery'), 'endpoint_example', 'https://receiver.example.test/events', 'example.webhook.key', 'v1', []);
+  ACTIVATE TEST MODULE sender;
+  SET TEST SECRET 'example.webhook.key' TO BYTES_HEX(REPEAT('11',32));
+  MOCK SINK sender.http RETURNS OUTCOME 'unknown';
+  LET id = CALL sender.send(SECRET_LITERAL(UTF8_ENCODE('event')));
+  CRASH AFTER DISPATCH sender.http;
+  DRAIN MODULE sender WITHIN 100 STEPS;
+  RESTART;
+  DRAIN MODULE sender WITHIN 100 STEPS;
+  ASSERT SINK sender.http DISPATCH COUNT = 1;
+  MOCK SINK sender.http RETURNS STATUS 204 BODY BYTES '';
+  ADVANCE TEST CLOCK BY SECONDS(30);
+  DRAIN MODULE sender WITHIN 100 STEPS;
+  ASSERT SINK sender.http DISPATCH COUNT = 2;
+  ASSERT (TEST PROTECTED REQUEST sender.http AT 1).headers['webhook-id'] = (TEST PROTECTED REQUEST sender.http AT 2).headers['webhook-id'];
+  ASSERT (SELECT ONE status FROM sender.status WHERE id = id).status = 'acknowledged';
+END;
+TEST 'concurrent duplicate intake commits one event and conflicting content refuses' USING MODULES (application) AS BEGIN
   ACTIVATE TEST MODULE application.receiver;
   SET TEST SECRET 'example.webhook.key' TO BYTES_HEX(REPEAT('11', 32));
   LET body = SECRET_LITERAL(UTF8_ENCODE('payload'));

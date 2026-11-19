@@ -5,8 +5,8 @@ END;
 CREATE PUBLIC MODULE Sync(binding SCHEMA_BINDING, client MODULE Requests, collection TEXT, supports_sync BOOLEAN) AS BEGIN
   BIND SCHEMA mirror TO $binding;
   LET codec = USE wire.Codec();
-  CREATE PRIVATE DOCUMENT mirror.objects (href TEXT PRIMARY KEY, body PROTECTED_REF) WITH (profile = 'versioned');
-  CREATE PRIVATE TABLE mirror.versions (href TEXT PRIMARY KEY, owner OWNER, etag TEXT, generation TEXT, deleted BOOLEAN);
+  CREATE PRIVATE DOCUMENT mirror.objects (href TEXT, owner OWNER, body PROTECTED_REF, PRIMARY KEY(owner, href)) WITH (profile = 'versioned');
+  CREATE PRIVATE TABLE mirror.versions (href TEXT, owner OWNER, etag TEXT, generation TEXT, deleted BOOLEAN, PRIMARY KEY(owner, href));
   CREATE PRIVATE TABLE mirror.cursor (owner OWNER PRIMARY KEY, token TEXT, generation TEXT, running BOOLEAN);
   CREATE PRIVATE QUEUE mirror.jobs (owner OWNER, generation TEXT, token TEXT, snapshot BOOLEAN) WITH (max_attempts = 1);
   CREATE PRIVATE STREAM mirror.changes (event_id TEXT, owner OWNER, href TEXT, action TEXT)
@@ -15,9 +15,9 @@ CREATE PUBLIC MODULE Sync(binding SCHEMA_BINDING, client MODULE Requests, collec
     INSERT INTO mirror.cursor VALUES (CURRENT_OWNER(), '', NEW_ID(), FALSE) ON CONFLICT DO NOTHING;
     LET cursor = SELECT ONE * FROM mirror.cursor WHERE owner = CURRENT_OWNER();
     REQUIRE NOT cursor.running ELSE 'SyncInProgress';
-    LET generation = NEW_ID();
-    UPDATE mirror.cursor SET running = TRUE, generation = generation WHERE owner = CURRENT_OWNER();
-    ENQUEUE INTO mirror.jobs VALUES (CURRENT_OWNER(), generation, cursor.token, cursor.token = '' OR NOT $supports_sync);
+    LET next_generation = NEW_ID();
+    UPDATE mirror.cursor SET running = TRUE, generation = next_generation WHERE owner = CURRENT_OWNER();
+    ENQUEUE INTO mirror.jobs VALUES (CURRENT_OWNER(), next_generation, cursor.token, cursor.token = '' OR NOT $supports_sync);
   END;
   CREATE DATAFLOW mirror.page FROM QUEUE mirror.jobs AS job AS BEGIN
     LET response = CALL $client.request(CASE WHEN $supports_sync THEN 'REPORT' ELSE 'PROPFIND' END, $collection,
@@ -27,7 +27,9 @@ CREATE PUBLIC MODULE Sync(binding SCHEMA_BINDING, client MODULE Requests, collec
       AND XML_HAS_NAME(XML_PARSE(response.body, max_bytes => 1048576, dtd => FALSE, external_entities => FALSE), '{DAV:}valid-sync-token') THEN
       BEGIN ATOMIC
         REQUIRE job.token <> '' ELSE 'SyncTokenRefused';
-        ENQUEUE INTO mirror.jobs VALUES (job.owner, job.generation, '', TRUE);
+        LET replacement = NEW_ID();
+        UPDATE mirror.cursor SET generation = replacement, token = '' WHERE owner = job.owner AND generation = job.generation;
+        ENQUEUE INTO mirror.jobs VALUES (job.owner, replacement, '', TRUE);
       END;
       RETURN;
     END IF;
@@ -48,8 +50,8 @@ CREATE PUBLIC MODULE Sync(binding SCHEMA_BINDING, client MODULE Requests, collec
     BEGIN ATOMIC
       REQUIRE (SELECT ONE generation FROM mirror.cursor WHERE owner = job.owner).generation = job.generation ELSE 'StaleSync';
       FOR record IN records DO
-        LET old = SELECT OPTIONAL * FROM mirror.versions WHERE href = record.href;
-        IF NOT record.deleted THEN UPSERT INTO mirror.objects VALUES (record.href, PROTECT(REQUIRE_SOME(record.body), 'dav.object', INFINITY)); END IF;
+        LET old = SELECT OPTIONAL * FROM mirror.versions WHERE href = record.href AND owner = job.owner;
+        IF NOT record.deleted THEN UPSERT INTO mirror.objects VALUES (record.href, job.owner, PROTECT(REQUIRE_SOME(record.body), 'dav.object', INFINITY)); END IF;
         UPSERT INTO mirror.versions VALUES (record.href, job.owner, record.etag, job.generation, record.deleted);
         IF NOT IS_PRESENT(old) OR REQUIRE_SOME(old).etag <> record.etag OR REQUIRE_SOME(old).deleted <> record.deleted THEN
           PRODUCE INTO mirror.changes VALUES (OPERATION_ID(job.generation, record.href || ':' || record.etag), job.owner, record.href, CASE WHEN record.deleted THEN 'deleted' ELSE 'updated' END);
@@ -60,8 +62,10 @@ CREATE PUBLIC MODULE Sync(binding SCHEMA_BINDING, client MODULE Requests, collec
         ENQUEUE INTO mirror.jobs VALUES (job.owner, job.generation, REQUIRE_SOME(page.token), job.snapshot);
       ELSE
         IF job.snapshot THEN
-          FOR stale IN SELECT MANY * FROM mirror.versions WHERE owner = job.owner AND generation <> job.generation AND NOT deleted LIMIT 1001 DO
-            UPDATE mirror.versions SET deleted = TRUE WHERE href = stale.href;
+          LET missing = SELECT MANY * FROM mirror.versions WHERE owner = job.owner AND generation <> job.generation AND NOT deleted LIMIT 1001;
+          REQUIRE LENGTH(missing) <= 1000 ELSE 'MirrorLimit';
+          FOR stale IN missing DO
+            UPDATE mirror.versions SET deleted = TRUE WHERE href = stale.href AND owner = job.owner;
             PRODUCE INTO mirror.changes VALUES (OPERATION_ID(job.generation, stale.href || ':deleted'), job.owner, stale.href, 'deleted');
           END FOR;
         END IF;
@@ -77,7 +81,7 @@ CREATE PUBLIC MODULE Sync(binding SCHEMA_BINDING, client MODULE Requests, collec
   END;
   CREATE DATAFLOW mirror.read FROM COMMAND (href TEXT) AS request AS BEGIN ATOMIC
     REQUIRE (SELECT ONE * FROM mirror.versions WHERE href = request.href AND owner = CURRENT_OWNER()).deleted = FALSE ELSE 'NotFound';
-    RETURN UNPROTECT((SELECT ONE body FROM mirror.objects WHERE href = request.href).body, 'dav.object');
+    RETURN UNPROTECT((SELECT ONE body FROM mirror.objects WHERE href = request.href AND owner = CURRENT_OWNER()).body, 'dav.object');
   END;
   EXPORT DATAFLOW mirror.refresh AS refresh;
   EXPORT DATAFLOW mirror.read AS read;

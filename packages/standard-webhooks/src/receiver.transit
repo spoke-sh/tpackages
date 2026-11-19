@@ -21,7 +21,7 @@ CREATE PUBLIC MODULE Receiver(binding SCHEMA_BINDING, endpoint TEXT, keys LIST<R
       RETURN id;
     END IF;
     PUT INTO receiver.claims KEY key VALUE ROW(owner => CURRENT_OWNER(), digest => digest,
-      payload => PROTECT(request.body, 'webhook.body', NOW() + DAYS(7))) IF ABSENT;
+      payload => PROTECT(request.body, 'webhook.body', INFINITY)) IF ABSENT;
     PRODUCE INTO receiver.accepted VALUES (id, CURRENT_OWNER(), NOW());
     RETURN id;
   END;
@@ -33,6 +33,7 @@ CREATE PUBLIC MODULE Receiver(binding SCHEMA_BINDING, endpoint TEXT, keys LIST<R
   CREATE DATAFLOW receiver.set_enabled FROM COMMAND (enabled BOOLEAN, revision REVISION) AS request AS BEGIN ATOMIC
     UPDATE receiver.policy SET enabled = request.enabled WHERE id = 'endpoint' IF REVISION = request.revision;
   END;
+  CREATE PUBLIC VIEW policy AS SELECT enabled, DOCUMENT_REVISION(receiver.policy, 'endpoint') AS revision FROM receiver.policy WHERE id = 'endpoint';
   EXPORT DATAFLOW receiver.accept AS accept;
   EXPORT DATAFLOW receiver.read_payload AS read_payload;
   EXPORT DATAFLOW receiver.set_enabled AS set_enabled;

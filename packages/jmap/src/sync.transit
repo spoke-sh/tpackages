@@ -16,9 +16,9 @@ CREATE PUBLIC MODULE Sync(binding SCHEMA_BINDING, mail MODULE Mail, type TEXT) A
     INSERT INTO sync.cursors VALUES (CURRENT_OWNER(), '', FALSE, '') ON CONFLICT DO NOTHING;
     LET cursor = SELECT ONE * FROM sync.cursors WHERE owner = CURRENT_OWNER();
     REQUIRE NOT cursor.running ELSE 'SyncInProgress';
-    LET generation = NEW_ID();
-    UPDATE sync.cursors SET running = TRUE, generation = generation WHERE owner = CURRENT_OWNER();
-    ENQUEUE INTO sync.jobs VALUES (CURRENT_OWNER(), generation, cursor.state, 0, NONE, NONE);
+    LET next_generation = NEW_ID();
+    UPDATE sync.cursors SET running = TRUE, generation = next_generation WHERE owner = CURRENT_OWNER();
+    ENQUEUE INTO sync.jobs VALUES (CURRENT_OWNER(), next_generation, cursor.state, 0, NONE, NONE);
   END;
   CREATE DATAFLOW sync.page FROM QUEUE sync.jobs AS job AS BEGIN
     VAR next_state = job.state; VAR ids = LIST<TEXT>(); VAR removed = LIST<TEXT>(); VAR more = FALSE;
@@ -36,7 +36,11 @@ CREATE PUBLIC MODULE Sync(binding SCHEMA_BINDING, mail MODULE Mail, type TEXT) A
     ELSE
       LET result = CALL $mail.changes($type, job.state);
       IF result = ERR('cannotCalculateChanges') THEN
-        BEGIN ATOMIC ENQUEUE INTO sync.jobs VALUES (job.owner, job.generation, '', 0, NONE, NONE); END;
+        BEGIN ATOMIC
+          LET replacement = NEW_ID();
+          UPDATE sync.cursors SET generation = replacement, state = '' WHERE owner = job.owner AND generation = job.generation;
+          ENQUEUE INTO sync.jobs VALUES (job.owner, replacement, '', 0, NONE, NONE);
+        END;
         RETURN;
       END IF;
       LET changes = REQUIRE_OK(result);
@@ -57,9 +61,9 @@ CREATE PUBLIC MODULE Sync(binding SCHEMA_BINDING, mail MODULE Mail, type TEXT) A
         UPSERT INTO sync.index VALUES (job.owner, id, job.generation, FALSE);
         PRODUCE INTO sync.changes VALUES (OPERATION_ID(CURRENT_REQUEST_ID(), id), job.owner, id, 'updated');
       END FOR;
-      FOR id IN removed DO
-        UPDATE sync.index SET deleted = TRUE WHERE owner = job.owner AND id = id;
-        PRODUCE INTO sync.changes VALUES (OPERATION_ID(CURRENT_REQUEST_ID(), id || ':delete'), job.owner, id, 'deleted');
+      FOR removed_id IN removed DO
+        UPDATE sync.index SET deleted = TRUE WHERE owner = job.owner AND id = removed_id;
+        PRODUCE INTO sync.changes VALUES (OPERATION_ID(CURRENT_REQUEST_ID(), removed_id || ':delete'), job.owner, removed_id, 'deleted');
       END FOR;
       IF job.state = '' AND more THEN
         ENQUEUE INTO sync.jobs VALUES (job.owner, job.generation, '', job.position + LENGTH(ids), query_state, initial_state);

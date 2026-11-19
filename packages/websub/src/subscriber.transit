@@ -4,7 +4,8 @@ CREATE PUBLIC MODULE Subscriber(binding SCHEMA_BINDING, origin TEXT, allowed_hos
   REQUIRE HTTPS_ORIGIN($origin) ELSE 'InvalidOrigin';
   LET discover = USE discovery.Discovery();
   CREATE PRIVATE DOCUMENT subscriptions.desired (id TEXT PRIMARY KEY, owner OWNER, topic TEXT, hub TEXT, active BOOLEAN) WITH (profile = 'versioned');
-  CREATE PRIVATE KV subscriptions.pending (ROW(id TEXT, owner OWNER, generation TEXT, topic TEXT, mode TEXT, secret PROTECTED_REF, deadline TIMESTAMP));
+  CREATE PRIVATE KV subscriptions.pending (ROW(id TEXT, owner OWNER, generation TEXT, previous OPTION<TEXT>, topic TEXT, mode TEXT, secret PROTECTED_REF, deadline TIMESTAMP));
+  CREATE PRIVATE TABLE subscriptions.expiry (path TEXT PRIMARY KEY, deadline TIMESTAMP);
   CREATE PRIVATE TABLE subscriptions.leases (id TEXT PRIMARY KEY, owner OWNER, generation TEXT, callback TEXT, secret PROTECTED_REF, expires TIMESTAMP, renew_at TIMESTAMP, state TEXT);
   CREATE PRIVATE QUEUE subscriptions.requests (id TEXT, owner OWNER, generation TEXT, mode TEXT, policy_revision REVISION, callback TEXT, secret PROTECTED_REF) WITH (max_attempts = 1);
   CREATE PRIVATE TABLE subscriptions.content (id TEXT PRIMARY KEY, owner OWNER, payload PROTECTED_REF, media_type TEXT);
@@ -23,12 +24,14 @@ CREATE PUBLIC MODULE Subscriber(binding SCHEMA_BINDING, origin TEXT, allowed_hos
   END;
   CREATE PROCEDURE subscriptions.request(id TEXT, mode TEXT) AS BEGIN ATOMIC
     LET desired = SELECT ONE * FROM subscriptions.desired WHERE id = $id;
+    LET current = SELECT OPTIONAL * FROM subscriptions.leases WHERE id = $id;
     LET generation = NEW_ID();
-    LET callback = $origin || '/websub/' || RANDOM_TOKEN(32);
-    LET secret = PROTECT(RANDOM_SECRET(32), 'websub.secret', INFINITY);
+    LET callback = CASE WHEN $mode = 'unsubscribe' THEN $origin || REQUIRE_SOME(current).callback ELSE $origin || '/websub/' || RANDOM_TOKEN(32) END;
+    LET secret = CASE WHEN $mode = 'unsubscribe' THEN REQUIRE_SOME(current).secret ELSE PROTECT_FOR_OWNER(RANDOM_SECRET(32), desired.owner, 'websub.secret', INFINITY) END;
     PUT INTO subscriptions.pending KEY URL_PATH(callback) VALUE ROW(id => $id, owner => desired.owner, generation => generation,
-      topic => desired.topic, mode => $mode, secret => secret, deadline => NOW() + SECONDS(600)) IF ABSENT;
-    ENQUEUE INTO subscriptions.requests VALUES ($id, desired.owner, generation, $mode, DOCUMENT_REVISION(subscriptions.desired, $id), callback, secret);
+      previous => OPTION_MAP(current, lease => lease.generation), topic => desired.topic, mode => $mode, secret => secret, deadline => NOW() + SECONDS(600)) IF ABSENT;
+    INSERT INTO subscriptions.expiry VALUES (URL_PATH(callback), NOW() + SECONDS(600));
+    ENQUEUE INTO subscriptions.requests VALUES ($id, desired.owner, generation, $mode, DOCUMENT_REVISION(subscriptions.desired, $id), callback, secret) AS OWNER desired.owner;
   END;
   CREATE DATAFLOW subscriptions.subscribe FROM COMMAND (topic TEXT, hub TEXT) AS request
     WITH (idempotency = 'original_owner_request') AS BEGIN ATOMIC
@@ -57,6 +60,8 @@ CREATE PUBLIC MODULE Subscriber(binding SCHEMA_BINDING, origin TEXT, allowed_hos
       AND REGEX_MATCH(request.challenge, '^[\x20-\x7e]{1,1024}$') ELSE 'InvalidVerification';
     LET desired = SELECT ONE * FROM subscriptions.desired WHERE id = pending.value.id;
     REQUIRE desired.active = (request.mode = 'subscribe') ELSE 'SubscriptionChanged';
+    LET current = SELECT OPTIONAL * FROM subscriptions.leases WHERE id = pending.value.id;
+    REQUIRE OPTION_MAP(current, lease => lease.generation) = pending.value.previous ELSE 'LeaseGenerationChanged';
     IF request.mode = 'subscribe' THEN
       UPSERT INTO subscriptions.leases VALUES (pending.value.id, pending.value.owner, pending.value.generation,
         request.path, pending.value.secret, NOW() + SECONDS(request.seconds), NOW() + SECONDS(MAX(1, request.seconds * 4 / 5)), 'active');
@@ -64,6 +69,7 @@ CREATE PUBLIC MODULE Subscriber(binding SCHEMA_BINDING, origin TEXT, allowed_hos
       UPDATE subscriptions.leases SET state = 'cancelled' WHERE id = pending.value.id;
     END IF;
     DELETE FROM subscriptions.pending KEY request.path IF REVISION = pending.revision;
+    DELETE FROM subscriptions.expiry WHERE path = request.path;
     PRODUCE INTO subscriptions.results VALUES (pending.value.generation || ':verified', CURRENT_OWNER(), pending.value.id, request.mode);
     RETURN request.challenge;
   END;
@@ -83,6 +89,12 @@ CREATE PUBLIC MODULE Subscriber(binding SCHEMA_BINDING, origin TEXT, allowed_hos
     CALL subscriptions.request(request.id, 'unsubscribe');
   END;
   CREATE DATAFLOW subscriptions.renew FROM TIMER EVERY INTERVAL '30s' AS tick AS BEGIN ATOMIC
+    FOR expired IN SELECT MANY * FROM subscriptions.expiry WHERE deadline <= NOW() ORDER BY deadline, path LIMIT 100 DO
+      LET context = REQUIRE_SOME(GET FROM subscriptions.pending KEY expired.path);
+      IF context.value.mode = 'subscribe' THEN DESTROY_PROTECTED(context.value.secret); END IF;
+      DELETE FROM subscriptions.pending KEY expired.path IF REVISION = context.revision;
+      DELETE FROM subscriptions.expiry WHERE path = expired.path;
+    END FOR;
     FOR lease IN SELECT MANY * FROM subscriptions.leases WHERE state = 'active' AND renew_at <= NOW() ORDER BY renew_at, id LIMIT 100 DO
       IF (SELECT ONE active FROM subscriptions.desired WHERE id = lease.id).active THEN CALL subscriptions.request(lease.id, 'subscribe'); END IF;
       UPDATE subscriptions.leases SET renew_at = NOW() + SECONDS(600) WHERE id = lease.id;

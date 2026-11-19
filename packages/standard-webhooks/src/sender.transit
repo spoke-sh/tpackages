@@ -1,7 +1,7 @@
 IMPORT signature FROM './signatures.transit';
-CREATE PUBLIC MODULE Sender(binding SCHEMA_BINDING, endpoint_id TEXT, url TEXT, key_reference TEXT, scheme TEXT) AS BEGIN
+CREATE PUBLIC MODULE Sender(binding SCHEMA_BINDING, endpoint_id TEXT, url TEXT, key_reference TEXT, scheme TEXT, previous_keys LIST<TEXT>) AS BEGIN
   BIND SCHEMA sender TO $binding;
-  REQUIRE HTTPS_URL($url, SET(URL_HOST($url))) AND $scheme IN ('v1', 'v2a') ELSE 'InvalidConfiguration';
+  REQUIRE HTTPS_URL($url, SET(URL_HOST($url))) AND $scheme IN ('v1', 'v2a') AND LENGTH($previous_keys) <= 3 ELSE 'InvalidConfiguration';
   LET signatures = USE signature.Signatures();
   CREATE PRIVATE DOCUMENT sender.policy (id TEXT PRIMARY KEY, enabled BOOLEAN) WITH (profile = 'versioned');
   INSERT INTO sender.policy VALUES ('endpoint', TRUE) ON CONFLICT DO NOTHING;
@@ -27,12 +27,15 @@ CREATE PUBLIC MODULE Sender(binding SCHEMA_BINDING, endpoint_id TEXT, url TEXT, 
     REQUIRE job.owner = CURRENT_OWNER() ELSE 'Forbidden';
     REQUIRE delivery.deadline > NOW() AND (SELECT ONE enabled FROM sender.policy WHERE id = 'endpoint').enabled ELSE 'DeliveryExpired';
     LET key = SECRET($key_reference);
+    LET old_keys = MAP_LIST($previous_keys, reference => SECRET(reference));
     LET timestamp = CAST(UNIX_SECONDS(job.signed_at) AS TEXT);
     LET body = UNPROTECT(delivery.payload, 'webhook.send');
+    LET signed = APPEND([signatures.sign($scheme, key, $endpoint_id, job.id, timestamp, body)],
+      MAP_LIST(old_keys, previous => signatures.sign($scheme, previous, $endpoint_id, job.id, timestamp, body)));
     LET headers = MAP('Content-Type' => 'application/octet-stream', 'webhook-id' => job.id, 'webhook-timestamp' => timestamp,
-      'webhook-signature' => signatures.sign($scheme, key, $endpoint_id, job.id, timestamp, body));
+      'webhook-signature' => JOIN(signed, ' '));
     LET result = EXECUTE SINK sender.http EFFECT OPERATION_ID(job.id, CAST(job.attempt AS TEXT))
-      GUARD SECRET_CURRENT(key) AND delivery.deadline > NOW() AND (SELECT ONE enabled FROM sender.policy WHERE id = 'endpoint').enabled
+      GUARD SECRET_CURRENT(key) AND ALL(old_keys, SECRET_CURRENT) AND delivery.deadline > NOW() AND (SELECT ONE enabled FROM sender.policy WHERE id = 'endpoint').enabled
       HEADERS headers BODY body ON REPLAY OBSERVE ONLY;
     BEGIN ATOMIC
       INSERT INTO sender.receipts VALUES (job.id, job.attempt, result.outcome, result.status) ON CONFLICT DO ASSERT SAME ROW;
@@ -42,10 +45,10 @@ CREATE PUBLIC MODULE Sender(binding SCHEMA_BINDING, endpoint_id TEXT, url TEXT, 
       IF NOT delivered AND NOT disabled AND job.attempt < 11 AND NOW() + SECONDS(delay) < delivery.deadline THEN
         ENQUEUE INTO sender.jobs VALUES (job.id, job.owner, job.attempt + 1, NOW() + SECONDS(delay)) AVAILABLE AT NOW() + SECONDS(delay);
       ELSE
-        LET status = CASE WHEN delivered THEN 'acknowledged' WHEN disabled THEN 'disabled' ELSE 'exhausted' END;
-        UPDATE sender.deliveries SET status = status WHERE id = job.id AND status = 'pending';
+        LET next_status = CASE WHEN delivered THEN 'acknowledged' WHEN disabled THEN 'disabled' ELSE 'exhausted' END;
+        UPDATE sender.deliveries SET status = next_status WHERE id = job.id AND status = 'pending';
         IF disabled THEN UPDATE sender.policy SET enabled = FALSE WHERE id = 'endpoint'; END IF;
-        PRODUCE INTO sender.results VALUES (job.id, job.owner, job.id, status);
+        PRODUCE INTO sender.results VALUES (job.id, job.owner, job.id, next_status);
       END IF;
     END;
   ON FAILURE failure
@@ -57,6 +60,7 @@ CREATE PUBLIC MODULE Sender(binding SCHEMA_BINDING, endpoint_id TEXT, url TEXT, 
     END;
   END;
   CREATE PUBLIC VIEW status AS SELECT id, status, deadline FROM sender.deliveries WHERE owner = CURRENT_OWNER();
+  CREATE PUBLIC VIEW policy AS SELECT enabled, DOCUMENT_REVISION(sender.policy, 'endpoint') AS revision FROM sender.policy WHERE id = 'endpoint';
   CREATE DATAFLOW sender.set_enabled FROM COMMAND (enabled BOOLEAN, revision REVISION) AS request AS BEGIN ATOMIC
     UPDATE sender.policy SET enabled = request.enabled WHERE id = 'endpoint' IF REVISION = request.revision;
   END;

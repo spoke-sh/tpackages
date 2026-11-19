@@ -1,11 +1,31 @@
+IMPORT library FROM '../build.transit';
 IMPORT wire FROM '../src/codec.transit';
 IMPORT signature FROM '../src/signatures.transit';
 LET codec = USE wire.Codec();
 LET signatures = USE signature.Signatures();
-TEST 'arbitrary JSON-LD contexts and unknown activities are refused' AS BEGIN
+TEST 'arbitrary JSON-LD contexts and unknown activities are refused' USING MODULES (application) AS BEGIN
   ASSERT codec.decode(UTF8_ENCODE('{"@context":"https://attacker.example/context","type":"Follow","id":"https://remote.example.test/1","actor":"https://remote.example.test/a","object":"https://local.example.test/actor"}')) FAILS WITH 'UnsupportedContext';
 END;
-TEST 'the explicit peer profile binds signatures to the inbox and raw bytes' AS BEGIN
+
+TEST 'private recipient lists are removed from nested object representations' USING MODULES (application) AS BEGIN
+  LET value = codec.public_object(JSON '{"type":"Create","bcc":["secret"],"object":{"type":"Note","bto":["private"],"content":"hi"}}');
+  ASSERT NOT JSON_HAS(value, 'bcc');
+  ASSERT NOT JSON_HAS(JSON_GET(value, 'object'), 'bto');
+END;
+
+TEST 'duplicate signed Follow intake neither auto-accepts nor emits twice' USING MODULES (application) AS BEGIN
+  ACTIVATE TEST MODULE application.api;
+  SET TEST OWNER 'example';
+  LET pair = TEST_ED25519_KEYPAIR('tpackages-federation-peer-v1');
+  CALL application.api.trust_peer('https://remote.example.test/actor', 'https://remote.example.test/actor#key', pair.public, 'https://remote.example.test/inbox', TRUE);
+  LET body = SECRET_LITERAL(UTF8_ENCODE('{"@context":"https://www.w3.org/ns/activitystreams","id":"https://remote.example.test/follow/1","type":"Follow","actor":"https://remote.example.test/actor","object":"https://local.example.test/actor"}'));
+  LET headers = signatures.sign('https://local.example.test/actor/inbox', body, 'https://remote.example.test/actor#key', pair.private, NOW());
+  CALL application.api.receive(headers, body);
+  CALL application.api.receive(headers, body);
+  ASSERT STREAM_COUNT(application.api.results) = 1;
+  ASSERT EFFECT_COUNT(application.api) = 0;
+END;
+TEST 'the explicit peer profile binds signatures to the inbox and raw bytes' USING MODULES (application) AS BEGIN
   LET pair = TEST_ED25519_KEYPAIR('tpackages-federation-peer-v1');
   LET body = SECRET_LITERAL(UTF8_ENCODE('{"example":true}'));
   LET headers = signatures.sign('https://local.example.test/actor/inbox', body, 'https://remote.example.test/a#key', pair.private, NOW());
@@ -13,7 +33,7 @@ TEST 'the explicit peer profile binds signatures to the inbox and raw bytes' AS 
   ASSERT signatures.verify('https://other.example.test/inbox', headers, body, 'https://remote.example.test/a#key', pair.public, NOW()) FAILS WITH 'InvalidSignature';
   ASSERT signatures.verify('https://local.example.test/actor/inbox', headers, body, 'https://remote.example.test/a#key', pair.public, NOW() + SECONDS(301)) FAILS WITH 'SignatureExpired';
 END;
-TEST 'peer trust mutation requires the local instance owner' AS BEGIN
+TEST 'peer trust mutation requires the local instance owner' USING MODULES (application) AS BEGIN
   ACTIVATE TEST MODULE application.api;
   SET TEST OWNER 'untrusted';
   ASSERT CALL application.api.trust_peer('https://remote.example.test/a', 'https://remote.example.test/a#key', BYTES_HEX(REPEAT('01',32)), 'https://remote.example.test/inbox', TRUE) FAILS WITH 'InvalidPeer';

@@ -26,20 +26,20 @@ CREATE PUBLIC MODULE Client(binding SCHEMA_BINDING, endpoint TEXT, authorization
     LET receipt = EXECUTE SINK rpc.http EFFECT job.id HEADERS MAP('Content-Type' => 'application/json')
       BODY UNPROTECT(call.body, 'rpc.request') ON REPLAY OBSERVE ONLY;
     BEGIN ATOMIC
-      VAR state = CASE WHEN receipt.outcome = 'unknown' THEN 'unknown' ELSE 'refused' END;
-      VAR result = NONE;
+      VAR next_state = CASE WHEN receipt.outcome = 'unknown' THEN 'unknown' ELSE 'refused' END;
+      VAR next_result = NONE;
       IF receipt.outcome = 'known' AND receipt.status BETWEEN 200 AND 299 THEN
         IF call.notification THEN
           REQUIRE LENGTH(receipt.body) = 0 ELSE 'UnexpectedNotificationResponse';
-          SET state = 'acknowledged';
+          SET next_state = 'acknowledged';
         ELSE
           LET value = codec.response(JSON_PARSE_PROTECTED(receipt.body, max_bytes => 1048576, max_depth => 32, duplicate_keys => 'reject'), JSON_FROM(job.id));
-          SET state = CASE WHEN JSON_HAS(value, 'error') THEN 'remote_error' ELSE 'completed' END;
-          SET result = SOME(PROTECT(value, 'rpc.result', INFINITY));
+          SET next_state = CASE WHEN JSON_HAS(value, 'error') THEN 'remote_error' ELSE 'completed' END;
+          SET next_result = SOME(PROTECT(value, 'rpc.result', INFINITY));
         END IF;
       END IF;
-      UPDATE rpc.calls SET state = state, result = result WHERE id = job.id AND state = 'pending';
-      PRODUCE INTO rpc.results VALUES (job.id, job.owner, state);
+      UPDATE rpc.calls SET state = next_state, result = next_result WHERE id = job.id AND state = 'pending';
+      PRODUCE INTO rpc.results VALUES (job.id, job.owner, next_state);
     END;
   ON FAILURE failure
     BEGIN ATOMIC

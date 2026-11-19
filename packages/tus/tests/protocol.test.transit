@@ -1,4 +1,5 @@
-TEST 'durable offset survives an interrupted PATCH and cannot be overwritten' AS BEGIN
+IMPORT library FROM '../build.transit';
+TEST 'durable offset survives an interrupted PATCH and cannot be overwritten' USING MODULES (application) AS BEGIN
   ACTIVATE TEST MODULE application.api;
   LET upload = CALL application.api.create(4, 'name ZmlsZQ==');
   ASSERT CALL application.api.patch(upload.id, 0, TEST_BYTE_STREAM(BYTES_HEX('0102'), interrupt_after => 2)) FAILS WITH 'BodyInterrupted';
@@ -8,7 +9,7 @@ TEST 'durable offset survives an interrupted PATCH and cannot be overwritten' AS
   ASSERT (CALL application.api.head(upload.id)).offset = 4;
   ASSERT STREAM_COUNT(application.api.results WHERE state = 'complete') = 1;
 END;
-TEST 'termination fences pending bytes and expiry refuses stale access' AS BEGIN
+TEST 'termination fences pending bytes and expiry refuses stale access' USING MODULES (application) AS BEGIN
   ACTIVATE TEST MODULE application.api;
   LET upload = CALL application.api.create(4, '');
   CALL application.api.terminate(upload.id);

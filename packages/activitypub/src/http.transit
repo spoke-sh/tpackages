@@ -13,6 +13,9 @@ CREATE PUBLIC MODULE Http(binding SCHEMA_BINDING, api MODULE Federation, actor_p
     WITH (method = 'GET', path = $actor_path, max_body_bytes = 0, response_status = 200, response_body = RESULT, response_headers = MAP('Content-Type' => 'application/activity+json'));
   CREATE SOURCE transport.outbox FROM HTTP REQUEST AS request INTO COMMAND $api.collection('outbound', COALESCE(HTTP_QUERY_OPTION_UNIQUE(request, 'after'), ''))
     WITH (method = 'GET', path = $actor_path || '/outbox', max_body_bytes = 0, response_status = 200, response_body = RESULT, response_headers = MAP('Content-Type' => 'application/activity+json'));
+  CREATE SOURCE transport.inbox_read FROM HTTP REQUEST AS request INTO COMMAND $api.collection('inbound', COALESCE(HTTP_QUERY_OPTION_UNIQUE(request, 'after'), ''))
+    WITH (method = 'GET', path = $actor_path || '/inbox', authentication = 'application', max_body_bytes = 0,
+      response_status = 200, response_body = RESULT, response_cache = 'no-store', response_headers = MAP('Content-Type' => 'application/activity+json'));
   CREATE SOURCE transport.object FROM HTTP REQUEST AS request INTO COMMAND $api.read($origin || HTTP_PATH(request))
     WITH (method = 'GET', path = $actor_path || '/objects/{id}', max_body_bytes = 0, response_status = 200, response_body = RESULT, response_headers = MAP('Content-Type' => 'application/activity+json'));
 END;

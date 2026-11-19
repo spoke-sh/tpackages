@@ -1,9 +1,10 @@
-TEST 'conditional writes require current remote state and reject foreign origins' AS BEGIN
+IMPORT library FROM '../build.transit';
+TEST 'conditional writes require current remote state and reject foreign origins' USING MODULES (application) AS BEGIN
   ACTIVATE TEST MODULE application.api;
   ASSERT CALL application.api.delete('https://attacker.example.test/object', '"1"') FAILS WITH 'DestinationDenied';
   ASSERT EFFECT_COUNT(application.api) = 0;
 END;
-TEST 'queries are bounded before dispatch' AS BEGIN
+TEST 'queries are bounded before dispatch' USING MODULES (application) AS BEGIN
   ACTIVATE TEST MODULE application.api;
   ASSERT CALL application.api.multiget('https://dav.example.test/collection/', []) FAILS WITH 'TooManyResources';
   ASSERT EFFECT_COUNT(application.api) = 0;

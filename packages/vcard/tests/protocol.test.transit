@@ -1,11 +1,12 @@
+IMPORT library FROM '../build.transit';
 IMPORT source FROM '../src/codec.transit';
 LET codec = USE source.Codec();
-TEST 'vCard versions and unknown repeated properties survive edits' AS BEGIN
+TEST 'vCard versions and unknown repeated properties survive edits' USING MODULES (application) AS BEGIN
   LET card = codec.decode(UTF8_ENCODE('BEGIN:VCARD\r\nVERSION:4.0\r\nFN:Alex\r\nEMAIL;TYPE=work:a@example.test\r\nX-APP:keep\r\nEND:VCARD\r\n'));
   LET updated = codec.decode(codec.encode(codec.set_formatted_name(card, 'Alex Smith')));
   ASSERT updated.version = '4.0' AND CONTAINS(updated.lines, 'X-APP:keep') AND CONTAINS(updated.lines, 'EMAIL;TYPE=work:a@example.test');
 END;
-TEST 'vCard 3 requires its structured name and line injection refuses' AS BEGIN
+TEST 'vCard 3 requires its structured name and line injection refuses' USING MODULES (application) AS BEGIN
   ASSERT codec.decode(UTF8_ENCODE('BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Alex\r\nEND:VCARD\r\n')) FAILS WITH 'MissingStructuredName';
   ASSERT codec.decode(UTF8_ENCODE('BEGIN:VCARD\r\nVERSION:5.0\r\nFN:Alex\r\nEND:VCARD\r\n')) FAILS WITH 'UnsupportedVersion';
 END;

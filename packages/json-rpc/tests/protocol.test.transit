@@ -1,10 +1,11 @@
+IMPORT library FROM '../build.transit';
 IMPORT source FROM '../src/codec.transit';
 LET codec = USE source.Codec();
-TEST 'missing id is a notification while null id requires a response' AS BEGIN
+TEST 'missing id is a notification while null id requires a response' USING MODULES (application) AS BEGIN
   ASSERT NOT IS_PRESENT(codec.request(JSON '{"jsonrpc":"2.0","method":"echo"}').id);
   ASSERT codec.request(JSON '{"jsonrpc":"2.0","id":null,"method":"echo"}').id = SOME(JSON 'null');
 END;
-TEST 'mixed batches preserve independent responses and omit notifications' AS BEGIN
+TEST 'mixed batches preserve independent responses and omit notifications' USING MODULES (application) AS BEGIN
   ACTIVATE TEST MODULE application.api;
   LET result = CALL application.api.receive(UTF8_ENCODE('[{"jsonrpc":"2.0","id":1,"method":"echo","params":{"value":"hello"}},{"jsonrpc":"2.0","method":"echo","params":{"value":"notice"}},7]'));
   ASSERT JSON_ARRAY_LENGTH(REQUIRE_SOME(result)) = 2;
@@ -12,7 +13,7 @@ TEST 'mixed batches preserve independent responses and omit notifications' AS BE
   ASSERT JSON_GET(JSON_GET(JSON_ARRAY_AT(REQUIRE_SOME(result), 1), 'error'), 'code') = JSON '-32600';
   ASSERT CALL application.api.receive(UTF8_ENCODE('[]')) = SOME(codec.error(JSON 'null', -32600, 'Invalid Request'));
 END;
-TEST 'malformed response ids and ambiguous result/error refuse' AS BEGIN
+TEST 'malformed response ids and ambiguous result/error refuse' USING MODULES (application) AS BEGIN
   ASSERT codec.response(JSON '{"jsonrpc":"2.0","id":"1","result":null}', JSON '1') FAILS WITH 'InvalidResponse';
   ASSERT codec.response(JSON '{"jsonrpc":"2.0","id":1,"result":null,"error":{"code":1,"message":"x"}}', JSON '1') FAILS WITH 'InvalidResponse';
 END;

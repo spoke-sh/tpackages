@@ -1,10 +1,11 @@
+IMPORT library FROM '../build.transit';
 IMPORT source FROM '../src/codec.transit';
 LET codec = USE source.Codec();
-TEST 'multistatus preserves property errors instead of treating 207 as total success' AS BEGIN
+TEST 'multistatus preserves property errors instead of treating 207 as total success' USING MODULES (application) AS BEGIN
   LET response = codec.multistatus(UTF8_ENCODE('<d:multistatus xmlns:d="DAV:"><d:response><d:href>/book/a</d:href><d:propstat><d:prop><d:getetag>"1"</d:getetag></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat><d:propstat><d:prop><d:displayname/></d:prop><d:status>HTTP/1.1 404 Not Found</d:status></d:propstat></d:response></d:multistatus>'), 'https://dav.example.test/book/', SET('dav.example.test'));
   ASSERT response.resources[0].errors['{DAV:}displayname'] = 404;
   ASSERT XML_TEXT(response.resources[0].properties['{DAV:}getetag']) = '"1"';
 END;
-TEST 'foreign response hrefs refuse before follow-up requests' AS BEGIN
+TEST 'foreign response hrefs refuse before follow-up requests' USING MODULES (application) AS BEGIN
   ASSERT codec.multistatus(UTF8_ENCODE('<d:multistatus xmlns:d="DAV:"><d:response><d:href>https://attacker.example.test/x</d:href><d:status>HTTP/1.1 200 OK</d:status></d:response></d:multistatus>'), 'https://dav.example.test/book/', SET('dav.example.test')) FAILS WITH 'InvalidHref';
 END;

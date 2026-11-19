@@ -35,6 +35,11 @@ CREATE PUBLIC MODULE Server(binding SCHEMA_BINDING, storage BLOB_STORE, max_byte
     RETURN ROW(offset => BLOB_DURABLE_OFFSET(file.blob), length => file.size, expires => file.expires,
       metadata => (SELECT ONE fields FROM uploads.metadata WHERE id = request.id).fields);
   END;
+  CREATE DATAFLOW uploads.open FROM COMMAND (id TEXT) AS request AS BEGIN ATOMIC
+    LET file = SELECT ONE * FROM uploads.files WHERE id = request.id AND owner = CURRENT_OWNER();
+    REQUIRE file.state = 'complete' AND file.expires > NOW() ELSE 'UploadUnavailable';
+    RETURN file.blob;
+  END;
   CREATE DATAFLOW uploads.patch FROM COMMAND (id TEXT, offset BIGINT, body BYTE_STREAM) AS request
     WITH (idempotency = 'original_owner_request', continuation = 'durable') AS BEGIN
     LET file = SELECT ONE * FROM uploads.files WHERE id = request.id AND owner = CURRENT_OWNER();
@@ -47,6 +52,7 @@ CREATE PUBLIC MODULE Server(binding SCHEMA_BINDING, storage BLOB_STORE, max_byte
     -- The native append owner atomically fences each accepted byte range against
     -- termination/expiry. Disconnect can commit a prefix and must report it on HEAD.
     REQUIRE receipt.outcome <> 'unknown' ELSE 'WriteUnknown';
+    VAR result = ROW(offset => 0, expires => file.expires);
     BEGIN ATOMIC
       LET current = SELECT ONE * FROM uploads.files WHERE id = file.id AND owner = CURRENT_OWNER();
       REQUIRE current.fence = file.fence AND current.state = 'open' AND current.expires > NOW() ELSE 'UploadGone';
@@ -55,9 +61,10 @@ CREATE PUBLIC MODULE Server(binding SCHEMA_BINDING, storage BLOB_STORE, max_byte
         UPDATE uploads.files SET state = 'complete' WHERE id = file.id;
         PRODUCE INTO uploads.results VALUES (file.id || ':complete', CURRENT_OWNER(), file.id, 'complete');
       END IF;
-      REQUIRE receipt.complete_request ELSE 'BodyInterrupted';
-      RETURN ROW(offset => offset, expires => current.expires);
+      SET result = ROW(offset => offset, expires => current.expires);
     END;
+    REQUIRE receipt.complete_request ELSE 'BodyInterrupted';
+    RETURN result;
   END;
   CREATE DATAFLOW uploads.terminate FROM COMMAND (id TEXT) AS request
     WITH (idempotency = 'original_owner_request') AS BEGIN ATOMIC
@@ -76,6 +83,7 @@ CREATE PUBLIC MODULE Server(binding SCHEMA_BINDING, storage BLOB_STORE, max_byte
   END;
   EXPORT DATAFLOW uploads.create AS create;
   EXPORT DATAFLOW uploads.head AS head;
+  EXPORT DATAFLOW uploads.open AS open;
   EXPORT DATAFLOW uploads.patch AS patch;
   EXPORT DATAFLOW uploads.terminate AS terminate;
   EXPORT STREAM uploads.results AS results;

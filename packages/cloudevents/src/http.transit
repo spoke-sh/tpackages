@@ -12,6 +12,7 @@ CREATE PUBLIC MODULE Http() AS BEGIN
     FOR name IN HTTP_FIELD_NAMES($headers) DO
       IF STARTS_WITH(LOWER(name), 'ce-') THEN
         LET key = SUBSTRING(LOWER(name), 3);
+        REQUIRE key <> 'datacontenttype' ELSE 'ConflictingBinding';
         REQUIRE NOT MAP_HAS(attributes, key) ELSE 'DuplicateAttribute';
         SET attributes = MAP_SET(attributes, key, JSON_FROM(HTTP_FIELD_UNIQUE($headers, name)));
       END IF;

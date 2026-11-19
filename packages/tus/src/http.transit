@@ -6,7 +6,7 @@ CREATE PUBLIC INTERFACE Uploads AS BEGIN
 END;
 CREATE PUBLIC MODULE Http(binding SCHEMA_BINDING, api MODULE Uploads, path TEXT, max_bytes BIGINT) AS BEGIN
   BIND SCHEMA transport TO $binding;
-  LET version = MAP('Tus-Resumable' => '1.0.0', 'Cache-Control' => 'no-store');
+  LET version = MAP('Tus-Resumable' => '1.0.0', 'Tus-Version' => '1.0.0', 'Cache-Control' => 'no-store');
   LET errors = MAP('OffsetConflict' => 409, 'UploadGone' => 410, 'UploadTooLarge' => 413, 'UnsupportedVersion' => 412, 'InvalidMetadata' => 400, 'BodyInterrupted' => 400, 'WriteUnknown' => 503);
   CREATE SOURCE transport.options FROM HTTP REQUEST AS request
     WITH (method = 'OPTIONS', path_prefix = $path, response_status = 204,

@@ -5,17 +5,25 @@ CREATE PUBLIC MODULE Server(binding SCHEMA_BINDING, methods COMMAND_BINDINGS) AS
   CREATE DATAFLOW rpc.member FROM COMMAND (value JSON) AS request WITH (continuation = 'durable') AS BEGIN
     LET parsed = TRY codec.request(request.value);
     IF parsed IS ERR THEN
+      IF parsed.error.code = 'InvalidParams' THEN
+        LET id = JSON_OPTION(request.value, 'id');
+        RETURN OPTION_MAP(id, value => codec.error(value, -32602, 'Invalid params'));
+      END IF;
       RETURN SOME(codec.error(JSON 'null', -32600, 'Invalid Request'));
     END IF;
     LET call = REQUIRE_OK(parsed);
     LET result = CASE WHEN STARTS_WITH(call.method, 'rpc.') OR NOT HAS_COMMAND($methods, call.method)
-      THEN ERR(ROW(code => -32601, message => 'Method not found'))
+      THEN ERR(ROW(code => 'MethodNotFound'))
       ELSE DISPATCH COMMAND $methods NAMED call.method PARAMETERS call.params
-        OWNER CURRENT_OWNER() DEADLINE NOW() + SECONDS(30) ERRORS AS JSON_RPC_ERRORS END;
+        OWNER CURRENT_OWNER() DEADLINE NOW() + SECONDS(30) ERRORS AS COMMAND_ERRORS END;
     IF NOT IS_PRESENT(call.id) THEN RETURN NONE; END IF;
     RETURN SOME(MATCH result
       WHEN OK(value) THEN JSON_OBJECT('jsonrpc', '2.0', 'id', REQUIRE_SOME(call.id), 'result', value)
-      WHEN ERR(problem) THEN codec.error(REQUIRE_SOME(call.id), problem.code, problem.message) END);
+      WHEN ERR(problem) THEN codec.error(REQUIRE_SOME(call.id),
+        CASE WHEN problem.code = 'MethodNotFound' THEN -32601 WHEN problem.code = 'InvalidParams' THEN -32602
+          WHEN problem.code = 'DeadlineExceeded' THEN -32000 ELSE -32603 END,
+        CASE WHEN problem.code = 'MethodNotFound' THEN 'Method not found' WHEN problem.code = 'InvalidParams' THEN 'Invalid params'
+          WHEN problem.code = 'DeadlineExceeded' THEN 'Deadline exceeded' ELSE 'Internal error' END) END);
   END;
   CREATE DATAFLOW rpc.receive FROM COMMAND (body BYTES) AS request WITH (continuation = 'durable') AS BEGIN
     LET parsed = TRY JSON_PARSE(request.body, max_bytes => 1048576, max_depth => 32, duplicate_keys => 'reject');
