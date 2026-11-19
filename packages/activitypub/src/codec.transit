@@ -1,0 +1,30 @@
+CREATE PUBLIC MODULE Codec() AS BEGIN
+  CREATE PUBLIC FUNCTION decode(body BYTES) RETURNS JSON AS BEGIN
+    LET value = JSON_PARSE($body, max_bytes => 1048576, max_depth => 32, duplicate_keys => 'reject');
+    REQUIRE JSON_TYPE(value) = 'object' AND JSON_GET(value, '@context') = JSON '"https://www.w3.org/ns/activitystreams"' ELSE 'UnsupportedContext';
+    REQUIRE JSON_STRING(value, 'type') IN ('Create','Update','Delete','Follow','Accept','Reject','Undo') ELSE 'UnsupportedActivity';
+    REQUIRE ABSOLUTE_URI(JSON_STRING(value, 'id')) AND ABSOLUTE_URI(JSON_STRING(value, 'actor')) ELSE 'InvalidIdentity';
+    REQUIRE JSON_HAS(value, 'object') ELSE 'MissingObject';
+    RETURN value;
+  END;
+  CREATE PUBLIC FUNCTION object_id(activity JSON) RETURNS TEXT AS BEGIN
+    LET object = JSON_GET($activity, 'object');
+    RETURN CASE WHEN JSON_TYPE(object) = 'string' THEN JSON_AS_STRING(object) ELSE JSON_STRING(object, 'id') END;
+  END;
+  CREATE FUNCTION strip_private(value JSON, depth BIGINT) RETURNS JSON AS BEGIN
+    REQUIRE $depth <= 32 ELSE 'ObjectTooDeep';
+    IF JSON_TYPE($value) = 'object' THEN
+      VAR result = JSON '{}';
+      FOR key IN JSON_KEYS(JSON_OMIT($value, SET('bto', 'bcc'))) DO
+        SET result = JSON_SET(result, key, strip_private(JSON_GET($value, key), $depth + 1));
+      END FOR;
+      RETURN result;
+    ELSEIF JSON_TYPE($value) = 'array' THEN
+      RETURN JSON_FROM_LIST(MAP_LIST(JSON_AS_ARRAY($value), item => strip_private(item, $depth + 1)));
+    END IF;
+    RETURN $value;
+  END;
+  CREATE PUBLIC FUNCTION public_object(value JSON) RETURNS JSON AS BEGIN
+    RETURN strip_private($value, 0);
+  END;
+END;

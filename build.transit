@@ -8,6 +8,7 @@ WORKSPACE tpackages AS BEGIN
   PACKAGE saml AT './packages/saml';
   PACKAGE scim AT './packages/scim';
   PACKAGE webauthn AT './packages/webauthn';
+  PACKAGE activitypub AT './packages/activitypub';
   PACKAGE jmap AT './packages/jmap';
   PACKAGE carddav AT './packages/carddav';
   PACKAGE caldav AT './packages/caldav';
@@ -29,6 +30,7 @@ IMPORT oidc FROM PACKAGE oidc FILE 'build.transit';
 IMPORT saml FROM PACKAGE saml FILE 'build.transit';
 IMPORT scim FROM PACKAGE scim FILE 'build.transit';
 IMPORT webauthn FROM PACKAGE webauthn FILE 'build.transit';
+IMPORT activitypub FROM PACKAGE activitypub FILE 'build.transit';
 IMPORT jmap FROM PACKAGE jmap FILE 'build.transit';
 IMPORT carddav FROM PACKAGE carddav FILE 'build.transit';
 IMPORT caldav FROM PACKAGE caldav FILE 'build.transit';
@@ -50,6 +52,7 @@ EXPORT TARGET default AS GROUP (
   saml.default,
   scim.default,
   webauthn.default,
+  activitypub.default,
   jmap.default,
   carddav.default,
   caldav.default,
@@ -71,6 +74,7 @@ EXPORT TEST TARGET tests AS GROUP (
   saml.tests,
   scim.tests,
   webauthn.tests,
+  activitypub.tests,
   jmap.tests,
   carddav.tests,
   caldav.tests,

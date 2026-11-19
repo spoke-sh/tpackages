@@ -1,0 +1,32 @@
+-- Explicit RFC 9421 profile; no legacy HTTP-signatures compatibility is implied.
+CREATE PUBLIC MODULE Signatures() AS BEGIN
+  CREATE FUNCTION parameters(created BIGINT, expires BIGINT, key_id TEXT) RETURNS TEXT AS BEGIN
+    REQUIRE ABSOLUTE_URI($key_id) AND NOT CONTAINS($key_id, '"') AND NOT CONTAINS($key_id, '\\') ELSE 'InvalidKeyId';
+    RETURN '("@method" "@target-uri" "content-digest" "content-type");created=' || CAST($created AS TEXT)
+      || ';expires=' || CAST($expires AS TEXT) || ';keyid="' || $key_id || '";alg="ed25519"';
+  END;
+  CREATE FUNCTION base(url TEXT, body SECRET<BYTES>, content_type TEXT, params TEXT) RETURNS SECRET<BYTES> AS BEGIN
+    REQUIRE $content_type = 'application/activity+json' ELSE 'UnsupportedMediaType';
+    RETURN UTF8_ENCODE('"@method": POST\n"@target-uri": ' || $url || '\n"content-digest": sha-256=:'
+      || BASE64_ENCODE(SHA256($body)) || ':\n"content-type": ' || $content_type || '\n"@signature-params": ' || $params);
+  END;
+  CREATE PUBLIC FUNCTION sign(url TEXT, body SECRET<BYTES>, key_id TEXT, key SECRET<BYTES>, now TIMESTAMP) RETURNS HTTP_FIELDS AS BEGIN
+    LET params = parameters(UNIX_SECONDS($now), UNIX_SECONDS($now) + 300, $key_id);
+    RETURN MAP('Content-Type' => 'application/activity+json', 'Content-Digest' => 'sha-256=:' || BASE64_ENCODE(SHA256($body)) || ':',
+      'Signature-Input' => 'sig1=' || params, 'Signature' => 'sig1=:' || BASE64_ENCODE(ED25519_SIGN($key, base($url, $body, 'application/activity+json', params))) || ':');
+  END;
+  CREATE PUBLIC FUNCTION verify(url TEXT, headers HTTP_FIELDS, body SECRET<BYTES>, key_id TEXT, key BYTES, now TIMESTAMP) RETURNS BOOLEAN AS BEGIN
+    LET input = HTTP_STRUCTURED_DICTIONARY(HTTP_FIELD_UNIQUE($headers, 'Signature-Input'));
+    REQUIRE MAP_SIZE(input) = 1 AND MAP_HAS(input, 'sig1') ELSE 'InvalidSignatureInput';
+    LET params = input['sig1'].parameters;
+    LET created = SF_INTEGER(params['created']); LET expires = SF_INTEGER(params['expires']);
+    REQUIRE created <= UNIX_SECONDS($now) + 30 AND expires > UNIX_SECONDS($now) AND expires - created BETWEEN 1 AND 300 ELSE 'SignatureExpired';
+    LET expected = parameters(created, expires, $key_id);
+    REQUIRE HTTP_FIELD_UNIQUE($headers, 'Signature-Input') = 'sig1=' || expected ELSE 'SignatureProfileMismatch';
+    REQUIRE HTTP_FIELD_UNIQUE($headers, 'Content-Digest') = 'sha-256=:' || BASE64_ENCODE(SHA256($body)) || ':' ELSE 'DigestMismatch';
+    LET signatures = HTTP_STRUCTURED_DICTIONARY(HTTP_FIELD_UNIQUE($headers, 'Signature'));
+    REQUIRE MAP_SIZE(signatures) = 1 AND MAP_HAS(signatures, 'sig1') ELSE 'InvalidSignature';
+    REQUIRE ED25519_VERIFY($key, base($url, $body, HTTP_FIELD_UNIQUE($headers, 'Content-Type'), expected), SF_BYTES(signatures['sig1'])) ELSE 'InvalidSignature';
+    RETURN TRUE;
+  END;
+END;

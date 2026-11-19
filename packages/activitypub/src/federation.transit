@@ -1,0 +1,125 @@
+IMPORT wire FROM './codec.transit';
+IMPORT signing FROM './signatures.transit';
+CREATE PUBLIC MODULE Federation(binding SCHEMA_BINDING, actor TEXT, owner OWNER, signing_key TEXT, allowed_hosts SET<TEXT>) AS BEGIN
+  BIND SCHEMA federation TO $binding;
+  REQUIRE HTTPS_URL($actor, SET(URL_HOST($actor))) ELSE 'InvalidActor';
+  LET codec = USE wire.Codec(); LET signatures = USE signing.Signatures();
+  CREATE PRIVATE DOCUMENT federation.peers (actor TEXT PRIMARY KEY, key_id TEXT, key BYTES, inbox TEXT, enabled BOOLEAN) WITH (profile = 'versioned');
+  CREATE PRIVATE DOCUMENT federation.objects (id TEXT PRIMARY KEY, actor TEXT, value JSON, public BOOLEAN, deleted BOOLEAN) WITH (profile = 'versioned');
+  CREATE PRIVATE TABLE federation.activities (id TEXT PRIMARY KEY, actor TEXT, type TEXT, object TEXT, digest BYTES, value PROTECTED_REF, direction TEXT, public BOOLEAN);
+  CREATE PRIVATE TABLE federation.follows (id TEXT PRIMARY KEY REFERENCES federation.activities(id), actor TEXT, target TEXT, state TEXT);
+  CREATE PRIVATE TABLE federation.recipients (activity TEXT REFERENCES federation.activities(id), actor TEXT, PRIMARY KEY(activity, actor));
+  CREATE PRIVATE TABLE federation.deliveries (activity TEXT, actor TEXT, attempt BIGINT, status TEXT, PRIMARY KEY(activity, actor));
+  CREATE PRIVATE QUEUE federation.jobs (activity TEXT, actor TEXT, attempt BIGINT, at TIMESTAMP) WITH (max_attempts = 1);
+  CREATE PRIVATE STREAM federation.results (event_id TEXT, owner OWNER, activity TEXT, kind TEXT)
+    WITH (retention = 'unlimited', partition_by = 'activity', disclosure = 'current_owner');
+  CREATE SINK federation.http INTO HTTP WITH (dynamic_endpoint = TRUE, allowed_hosts = $allowed_hosts, method = 'POST', request_encoding = 'bytes',
+    response = 'bytes', response_max_bytes = 4096, follow_redirects = FALSE, max_attempts = 1, request_timeout = '20s', unknown_outcome = 'retain', capture = 'redacted_metadata');
+  CREATE DATAFLOW federation.trust_peer FROM COMMAND (actor TEXT, key_id TEXT, key BYTES, inbox TEXT, enabled BOOLEAN) AS request AS BEGIN ATOMIC
+    REQUIRE CURRENT_OWNER() = $owner AND HTTPS_URL(request.actor, $allowed_hosts) AND HTTPS_URL(request.inbox, $allowed_hosts)
+      AND URL_ORIGIN(request.actor) = URL_ORIGIN(request.inbox) AND LENGTH(request.key) = 32 ELSE 'InvalidPeer';
+    UPSERT INTO federation.peers VALUES (request.actor, request.key_id, request.key, request.inbox, request.enabled);
+  END;
+  CREATE PROCEDURE federation.apply(value JSON, direction TEXT) AS BEGIN ATOMIC
+    LET id = JSON_STRING($value, 'id'); LET actor = JSON_STRING($value, 'actor'); LET type = JSON_STRING($value, 'type');
+    LET object_id = codec.object_id($value); LET object = JSON_GET($value, 'object');
+    REQUIRE ABSOLUTE_URI(object_id) ELSE 'InvalidObjectId';
+    IF type IN ('Create','Update') THEN
+      REQUIRE JSON_TYPE(object) = 'object' AND JSON_STRING(object, 'type') IN ('Note','Document')
+        AND JSON_STRING(object, 'attributedTo') = actor AND URL_ORIGIN(object_id) = URL_ORIGIN(actor) ELSE 'ObjectOwnership';
+      LET old = SELECT OPTIONAL * FROM federation.objects WHERE id = object_id;
+      IF IS_PRESENT(old) THEN REQUIRE REQUIRE_SOME(old).actor = actor AND NOT REQUIRE_SOME(old).deleted ELSE 'ObjectOwnership'; END IF;
+      REQUIRE (type = 'Create' AND NOT IS_PRESENT(old)) OR (type = 'Update' AND IS_PRESENT(old)) ELSE 'ObjectStateConflict';
+      LET public = CONTAINS(JSON_STRING_LIST_OR_DEFAULT(object, 'to', []), 'https://www.w3.org/ns/activitystreams#Public');
+      UPSERT INTO federation.objects VALUES (object_id, actor, codec.public_object(object), public, FALSE);
+    ELSEIF type = 'Delete' THEN
+      LET previous = SELECT ONE * FROM federation.objects WHERE id = object_id;
+      REQUIRE previous.actor = actor ELSE 'ObjectOwnership';
+      UPDATE federation.objects SET value = JSON_OBJECT('id', object_id, 'type', 'Tombstone'), deleted = TRUE WHERE id = object_id;
+    ELSEIF type = 'Follow' THEN
+      REQUIRE object_id = $actor OR actor = $actor ELSE 'WrongRecipient';
+      INSERT INTO federation.follows VALUES (id, actor, object_id, 'pending');
+    ELSEIF type IN ('Accept','Reject') THEN
+      LET follow = SELECT ONE * FROM federation.follows WHERE id = object_id;
+      REQUIRE follow.target = actor AND follow.state = 'pending' ELSE 'FollowMismatch';
+      UPDATE federation.follows SET state = CASE WHEN type = 'Accept' THEN 'accepted' ELSE 'rejected' END WHERE id = object_id;
+    ELSEIF type = 'Undo' THEN
+      LET previous = SELECT ONE * FROM federation.activities WHERE id = object_id;
+      REQUIRE previous.actor = actor AND previous.type = 'Follow' ELSE 'UndoMismatch';
+      UPDATE federation.follows SET state = 'undone' WHERE id = object_id;
+    END IF;
+  END;
+  CREATE DATAFLOW federation.receive FROM COMMAND (headers HTTP_FIELDS, body SECRET<BYTES>) AS request AS BEGIN ATOMIC
+    REQUIRE CURRENT_OWNER() = $owner ELSE 'Forbidden';
+    LET value = codec.decode(request.body); LET peer_actor = JSON_STRING(value, 'actor'); LET activity_id = JSON_STRING(value, 'id');
+    LET peer = SELECT ONE * FROM federation.peers WHERE actor = peer_actor;
+    REQUIRE peer.enabled AND URL_ORIGIN(activity_id) = URL_ORIGIN(peer_actor) ELSE 'ActorNotTrusted';
+    REQUIRE signatures.verify($actor || '/inbox', request.headers, request.body, peer.key_id, peer.key, NOW());
+    LET previous = SELECT OPTIONAL * FROM federation.activities WHERE id = activity_id;
+    IF IS_PRESENT(previous) THEN REQUIRE REQUIRE_SOME(previous).digest = COMMITMENT(request.body) ELSE 'ConflictingActivity'; RETURN activity_id; END IF;
+    INSERT INTO federation.activities VALUES (activity_id, peer_actor, JSON_STRING(value, 'type'), codec.object_id(value), COMMITMENT(request.body), PROTECT(value, 'activity', INFINITY), 'inbound', FALSE);
+    CALL federation.apply(value, 'inbound');
+    PRODUCE INTO federation.results VALUES (activity_id, $owner, activity_id, 'received');
+    RETURN activity_id;
+  END;
+  CREATE DATAFLOW federation.publish FROM COMMAND (body JSON, recipients SET<TEXT>) AS request
+    WITH (idempotency = 'original_owner_request') AS BEGIN ATOMIC
+    REQUIRE CURRENT_OWNER() = $owner AND LENGTH(request.recipients) BETWEEN 1 AND 100 ELSE 'PublicationRefused';
+    LET id = $actor || '/activities/' || OPERATION_ID(CURRENT_REQUEST_ID(), 'activity');
+    LET value = codec.decode(JSON_ENCODE(JSON_SET(JSON_SET(JSON_SET(request.body, '@context', JSON_FROM('https://www.w3.org/ns/activitystreams')), 'id', JSON_FROM(id)), 'actor', JSON_FROM($actor))));
+    LET public = CONTAINS(JSON_STRING_LIST_OR_DEFAULT(value, 'to', []), 'https://www.w3.org/ns/activitystreams#Public');
+    INSERT INTO federation.activities VALUES (id, $actor, JSON_STRING(value, 'type'), codec.object_id(value), SHA256(JSON_ENCODE(value)), PROTECT(codec.public_object(value), 'activity', INFINITY), 'outbound', public);
+    CALL federation.apply(value, 'outbound');
+    FOR recipient IN request.recipients DO
+      REQUIRE (SELECT ONE enabled FROM federation.peers WHERE actor = recipient).enabled ELSE 'ActorNotTrusted';
+      INSERT INTO federation.recipients VALUES (id, recipient);
+      INSERT INTO federation.deliveries VALUES (id, recipient, 0, 'pending');
+      ENQUEUE INTO federation.jobs VALUES (id, recipient, 0, NOW());
+    END FOR;
+    PRODUCE INTO federation.results VALUES (id, $owner, id, 'published');
+    RETURN id;
+  END;
+  CREATE DATAFLOW federation.deliver FROM QUEUE federation.jobs AS job AS BEGIN
+    LET peer = SELECT ONE * FROM federation.peers WHERE actor = job.actor;
+    REQUIRE peer.enabled ELSE 'PeerDisabled';
+    LET key = SECRET($signing_key);
+    LET activity = SELECT ONE * FROM federation.activities WHERE id = job.activity;
+    LET body = JSON_ENCODE(UNPROTECT(activity.value, 'activity'));
+    LET receipt = EXECUTE SINK federation.http EFFECT OPERATION_ID(job.activity, job.actor || ':' || CAST(job.attempt AS TEXT))
+      ENDPOINT peer.inbox GUARD (SELECT ONE enabled FROM federation.peers WHERE actor = job.actor).enabled AND SECRET_CURRENT(key)
+      HEADERS signatures.sign(peer.inbox, body, $actor || '#main-key', key, job.at) BODY body ON REPLAY OBSERVE ONLY;
+    BEGIN ATOMIC
+      LET accepted = receipt.outcome = 'known' AND receipt.status BETWEEN 200 AND 299;
+      LET next_status = CASE WHEN accepted THEN 'acknowledged' WHEN receipt.outcome = 'unknown' THEN 'unknown' ELSE 'refused' END;
+      UPDATE federation.deliveries SET status = next_status, attempt = job.attempt WHERE activity = job.activity AND actor = job.actor;
+      PRODUCE INTO federation.results VALUES (OPERATION_ID(job.activity, job.actor || ':' || CAST(job.attempt AS TEXT)), $owner, job.activity, next_status);
+      IF NOT accepted AND job.attempt < 7 THEN
+        LET at = NOW() + SECONDS(MIN(21600, POWER(2, job.attempt) * 60));
+        ENQUEUE INTO federation.jobs VALUES (job.activity, job.actor, job.attempt + 1, at) AVAILABLE AT at;
+      END IF;
+    END;
+  END;
+  CREATE DATAFLOW federation.read FROM COMMAND (id TEXT) AS request AS BEGIN ATOMIC
+    LET object = SELECT ONE * FROM federation.objects WHERE id = request.id;
+    REQUIRE object.public OR CURRENT_OWNER() = $owner ELSE 'Forbidden';
+    RETURN object.value;
+  END;
+  CREATE DATAFLOW federation.collection FROM COMMAND (direction TEXT, after TEXT) AS request AS BEGIN ATOMIC
+    REQUIRE request.direction IN ('inbound','outbound') ELSE 'InvalidCollection';
+    LET rows = SELECT MANY * FROM federation.activities WHERE direction = request.direction AND id > request.after
+      AND (public OR CURRENT_OWNER() = $owner) ORDER BY id LIMIT 100;
+    RETURN JSON_OBJECT('@context', 'https://www.w3.org/ns/activitystreams', 'type', 'OrderedCollectionPage',
+      'orderedItems', JSON_FROM_LIST(MAP_LIST(rows, row => codec.public_object(UNPROTECT(row.value, 'activity')))));
+  END;
+  CREATE DATAFLOW federation.actor FROM COMMAND () AS request AS BEGIN ATOMIC
+    RETURN JSON_OBJECT('@context', 'https://www.w3.org/ns/activitystreams', 'id', $actor, 'type', 'Service',
+      'inbox', $actor || '/inbox', 'outbox', $actor || '/outbox');
+  END;
+  EXPORT DATAFLOW federation.trust_peer AS trust_peer;
+  EXPORT DATAFLOW federation.receive AS receive;
+  EXPORT DATAFLOW federation.publish AS publish;
+  EXPORT DATAFLOW federation.read AS read;
+  EXPORT DATAFLOW federation.collection AS collection;
+  EXPORT DATAFLOW federation.actor AS actor;
+  EXPORT STREAM federation.results AS results;
+END;

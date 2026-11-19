@@ -1,0 +1,6 @@
+EXPORT MODULE Codec FROM './src/codec.transit';
+EXPORT MODULE Signatures FROM './src/signatures.transit';
+EXPORT MODULE Federation FROM './src/federation.transit';
+EXPORT MODULE Http FROM './src/http.transit';
+EXPORT TARGET default FROM './examples/build.transit';
+EXPORT TEST TARGET tests FROM './tests/build.transit';
