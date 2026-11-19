@@ -101,7 +101,7 @@ CREATE PUBLIC MODULE Federation(binding SCHEMA_BINDING, actor TEXT, owner OWNER,
     LET body = JSON_ENCODE(UNPROTECT(activity.value, 'activity'));
     LET receipt = EXECUTE SINK federation.http EFFECT OPERATION_ID(job.activity, job.actor || ':' || CAST(job.attempt AS TEXT))
       ENDPOINT peer.inbox GUARD (SELECT ONE enabled FROM federation.peers WHERE actor = job.actor).enabled AND SECRET_CURRENT(key)
-      HEADERS signatures.sign(peer.inbox, body, $actor || '#main-key', key, job.at) BODY body ON REPLAY OBSERVE ONLY;
+      HEADERS signatures.sign(peer.inbox, body, $actor || '#main-key', key, NOW()) BODY body ON REPLAY OBSERVE ONLY;
     BEGIN ATOMIC
       LET accepted = receipt.outcome = 'known' AND receipt.status BETWEEN 200 AND 299;
       INSERT INTO federation.receipts VALUES (job.activity, job.actor, job.attempt, receipt.outcome, receipt.status) ON CONFLICT DO ASSERT SAME ROW;

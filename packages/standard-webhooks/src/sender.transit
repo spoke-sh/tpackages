@@ -29,7 +29,9 @@ CREATE PUBLIC MODULE Sender(binding SCHEMA_BINDING, endpoint_id TEXT, url TEXT, 
     REQUIRE delivery.deadline > NOW() AND (SELECT ONE enabled FROM sender.policy WHERE id = 'endpoint').enabled ELSE 'DeliveryExpired';
     LET key = SECRET($key_reference);
     LET old_keys = MAP_LIST($previous_keys, reference => SECRET(reference));
-    LET timestamp = CAST(UNIX_SECONDS(job.signed_at) AS TEXT);
+    -- Native continuation freezes this attempt's prepared request. A delayed
+    -- queue wake signs at dispatch time, not at its original eligibility time.
+    LET timestamp = CAST(UNIX_SECONDS(NOW()) AS TEXT);
     LET body = UNPROTECT(delivery.payload, 'webhook.send');
     LET signed = APPEND([signatures.sign($scheme, key, $endpoint_id, job.id, timestamp, body)],
       MAP_LIST(old_keys, previous => signatures.sign($scheme, previous, $endpoint_id, job.id, timestamp, body)));
