@@ -1,0 +1,26 @@
+IMPORT source FROM '../src/signatures.transit';
+LET signatures = USE source.Signatures();
+TEST 'signature input preserves exact body bytes and rejects endpoint confusion' AS BEGIN
+  SET TEST SECRET 'example.webhook.key' TO BYTES_HEX(REPEAT('11', 32));
+  LET key = SECRET('example.webhook.key');
+  LET time = CAST(UNIX_SECONDS(NOW()) AS TEXT);
+  LET body = SECRET_LITERAL(UTF8_ENCODE('{"a":1}'));
+  LET signature = signatures.sign('v1', key, 'endpoint_example', 'msg_1', time, body);
+  LET headers = MAP('webhook-id' => 'msg_1', 'webhook-timestamp' => time, 'webhook-signature' => signature);
+  ASSERT signatures.verify(headers, body, 'endpoint_example', [ROW(scheme => 'v1', key => key)], NOW()) = 'msg_1';
+  ASSERT signatures.verify(headers, SECRET_LITERAL(UTF8_ENCODE('{"a": 1}')), 'endpoint_example', [ROW(scheme => 'v1', key => key)], NOW()) FAILS WITH 'InvalidSignature';
+  ASSERT signatures.verify(headers, body, 'endpoint_example', [ROW(scheme => 'v1', key => key)], NOW() + SECONDS(301)) FAILS WITH 'StaleSignature';
+END;
+TEST 'concurrent duplicate intake commits one event and conflicting content refuses' AS BEGIN
+  ACTIVATE TEST MODULE application.receiver;
+  SET TEST SECRET 'example.webhook.key' TO BYTES_HEX(REPEAT('11', 32));
+  LET body = SECRET_LITERAL(UTF8_ENCODE('payload'));
+  LET time = CAST(UNIX_SECONDS(NOW()) AS TEXT);
+  LET headers = MAP('webhook-id' => 'msg_2', 'webhook-timestamp' => time, 'webhook-signature' => signatures.sign('v1', SECRET('example.webhook.key'), 'endpoint_example', 'msg_2', time, body));
+  CONCURRENT BEGIN
+    CALL application.receiver.accept(headers, body);
+    CALL application.receiver.accept(headers, body);
+  END;
+  ASSERT STREAM_COUNT(application.receiver.accepted) = 1;
+  ASSERT CALL application.receiver.read_payload('msg_2') = body;
+END;

@@ -915,6 +915,70 @@
         "line": "1",
         "byte_column": "23"
       }
+    },
+    {
+      "id": "packages-cloudevents-build",
+      "entry": "packages/cloudevents/build.transit",
+      "action": "build",
+      "requirement": "TP-02",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "21"
+      }
+    },
+    {
+      "id": "packages-cloudevents-test",
+      "entry": "packages/cloudevents/build.transit",
+      "action": "test",
+      "requirement": "TP-02",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "21"
+      }
+    },
+    {
+      "id": "packages-standard-webhooks-build",
+      "entry": "packages/standard-webhooks/build.transit",
+      "action": "build",
+      "requirement": "TP-02",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "26"
+      }
+    },
+    {
+      "id": "packages-standard-webhooks-test",
+      "entry": "packages/standard-webhooks/build.transit",
+      "action": "test",
+      "requirement": "TP-02",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "26"
+      }
     }
   ]
 }

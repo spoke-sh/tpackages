@@ -1,0 +1,45 @@
+CREATE PUBLIC TYPE Event AS ROW(attributes MAP<TEXT, JSON>, data OPTION<JSON>, binary OPTION<BYTES>);
+
+CREATE PUBLIC MODULE Codec() AS BEGIN
+  CREATE PUBLIC FUNCTION validate(event Event) RETURNS Event AS BEGIN
+    REQUIRE MAP_SIZE($event.attributes) <= 64 ELSE 'TooManyAttributes';
+    FOR name IN MAP_KEYS($event.attributes) DO
+      REQUIRE REGEX_MATCH(name, '^[a-z0-9]{1,64}$') AND name NOT IN ('data', 'data_base64') ELSE 'InvalidAttribute';
+      LET value = MAP_GET($event.attributes, name);
+      REQUIRE JSON_TYPE(value) IN ('string', 'number', 'boolean') ELSE 'InvalidAttributeType';
+      IF JSON_TYPE(value) = 'number' THEN REQUIRE JSON_IS_INTEGER(value) ELSE 'InvalidAttributeType'; END IF;
+    END FOR;
+    FOR name IN ['specversion', 'id', 'source', 'type'] DO
+      REQUIRE MAP_HAS($event.attributes, name) AND JSON_TYPE(MAP_GET($event.attributes, name)) = 'string'
+        AND LENGTH(JSON_AS_STRING(MAP_GET($event.attributes, name))) > 0 ELSE 'MissingAttribute';
+    END FOR;
+    REQUIRE MAP_GET($event.attributes, 'specversion') = JSON '"1.0"' ELSE 'UnsupportedVersion';
+    REQUIRE URI_REFERENCE_VALID(JSON_AS_STRING(MAP_GET($event.attributes, 'source'))) ELSE 'InvalidSource';
+    FOR name IN ['subject', 'datacontenttype', 'dataschema', 'time'] DO
+      IF MAP_HAS($event.attributes, name) THEN
+        REQUIRE JSON_TYPE(MAP_GET($event.attributes, name)) = 'string' ELSE 'InvalidAttributeType';
+      END IF;
+    END FOR;
+    IF MAP_HAS($event.attributes, 'dataschema') THEN
+      REQUIRE ABSOLUTE_URI(JSON_AS_STRING(MAP_GET($event.attributes, 'dataschema'))) ELSE 'InvalidSchema';
+    END IF;
+    IF MAP_HAS($event.attributes, 'time') THEN
+      REQUIRE RFC3339_VALID(JSON_AS_STRING(MAP_GET($event.attributes, 'time'))) ELSE 'InvalidTime';
+    END IF;
+    REQUIRE NOT (IS_PRESENT($event.data) AND IS_PRESENT($event.binary)) ELSE 'AmbiguousData';
+    RETURN $event;
+  END;
+  CREATE PUBLIC FUNCTION decode(body BYTES) RETURNS Event AS BEGIN
+    LET value = JSON_PARSE($body, max_bytes => 1048576, max_depth => 32, duplicate_keys => 'reject');
+    REQUIRE JSON_TYPE(value) = 'object' ELSE 'InvalidEnvelope';
+    RETURN validate(ROW(attributes => JSON_OBJECT_FIELDS(JSON_OMIT(value, SET('data', 'data_base64'))),
+      data => JSON_OPTION(value, 'data'), binary => OPTION_MAP(JSON_OPTION_STRING(value, 'data_base64'), BASE64_DECODE_STRICT)));
+  END;
+  CREATE PUBLIC FUNCTION encode(event Event) RETURNS BYTES AS BEGIN
+    LET valid = validate($event);
+    VAR value = JSON_FROM_MAP(valid.attributes);
+    IF IS_PRESENT(valid.data) THEN SET value = JSON_SET(value, 'data', REQUIRE_SOME(valid.data)); END IF;
+    IF IS_PRESENT(valid.binary) THEN SET value = JSON_SET(value, 'data_base64', JSON_FROM(BASE64_ENCODE(REQUIRE_SOME(valid.binary)))); END IF;
+    RETURN JSON_ENCODE(value, max_bytes => 1048576);
+  END;
+END;

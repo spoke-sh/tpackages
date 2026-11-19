@@ -20,6 +20,8 @@ PACKAGES = {
     "saml": set(),
     "scim": set(),
     "webauthn": set(),
+    "standard-webhooks": set(),
+    "cloudevents": set(),
 }
 
 

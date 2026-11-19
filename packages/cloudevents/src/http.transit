@@ -1,0 +1,40 @@
+IMPORT types FROM './codec.transit';
+CREATE PUBLIC MODULE Http() AS BEGIN
+  LET codec = USE types.Codec();
+  CREATE PUBLIC FUNCTION decode(headers HTTP_FIELDS, body BYTES) RETURNS types.Event AS BEGIN
+    LET content_type = HTTP_FIELD_OPTION_UNIQUE($headers, 'content-type');
+    IF OPTION_ANY(content_type, value => MEDIA_TYPE(value) = 'application/cloudevents+json') THEN
+      REQUIRE NOT ANY(HTTP_FIELD_NAMES($headers), name => STARTS_WITH(LOWER(name), 'ce-')) ELSE 'ConflictingBinding';
+      RETURN codec.decode($body);
+    END IF;
+    REQUIRE LENGTH($body) <= 1048576 ELSE 'BodyTooLarge';
+    VAR attributes = MAP<TEXT, JSON>();
+    FOR name IN HTTP_FIELD_NAMES($headers) DO
+      IF STARTS_WITH(LOWER(name), 'ce-') THEN
+        LET key = SUBSTRING(LOWER(name), 3);
+        REQUIRE NOT MAP_HAS(attributes, key) ELSE 'DuplicateAttribute';
+        SET attributes = MAP_SET(attributes, key, JSON_FROM(HTTP_FIELD_UNIQUE($headers, name)));
+      END IF;
+    END FOR;
+    IF IS_PRESENT(content_type) THEN SET attributes = MAP_SET(attributes, 'datacontenttype', JSON_FROM(REQUIRE_SOME(content_type))); END IF;
+    RETURN codec.validate(ROW(attributes => attributes, data => NONE, binary => SOME($body)));
+  END;
+  CREATE PUBLIC FUNCTION encode(event types.Event, mode TEXT) RETURNS ROW(headers HTTP_FIELDS, body BYTES) AS BEGIN
+    LET valid = codec.validate($event);
+    IF $mode = 'structured' THEN RETURN ROW(headers => MAP('Content-Type' => 'application/cloudevents+json'), body => codec.encode(valid)); END IF;
+    REQUIRE $mode = 'binary' ELSE 'UnsupportedBinding';
+    VAR headers = MAP<TEXT, TEXT>();
+    FOR name IN MAP_KEYS(valid.attributes) DO
+      LET value = MAP_GET(valid.attributes, name);
+      LET wire = CASE WHEN JSON_TYPE(value) = 'string' THEN JSON_AS_STRING(value) ELSE UTF8_DECODE(JSON_ENCODE(value)) END;
+      SET headers = MAP_SET(headers, CASE WHEN name = 'datacontenttype' THEN 'Content-Type' ELSE 'ce-' || name END, wire);
+    END FOR;
+    LET body = CASE WHEN IS_PRESENT(valid.binary) THEN REQUIRE_SOME(valid.binary)
+      WHEN IS_PRESENT(valid.data) THEN JSON_ENCODE(REQUIRE_SOME(valid.data)) ELSE BYTES '' END;
+    IF IS_PRESENT(valid.data) THEN
+      REQUIRE NOT MAP_HAS(headers, 'Content-Type') OR JSON_MEDIA_TYPE(MAP_GET(headers, 'Content-Type')) ELSE 'DataContentTypeMismatch';
+      IF NOT MAP_HAS(headers, 'Content-Type') THEN SET headers = MAP_SET(headers, 'Content-Type', 'application/json'); END IF;
+    END IF;
+    RETURN ROW(headers => headers, body => body);
+  END;
+END;

@@ -8,6 +8,8 @@ WORKSPACE tpackages AS BEGIN
   PACKAGE saml AT './packages/saml';
   PACKAGE scim AT './packages/scim';
   PACKAGE webauthn AT './packages/webauthn';
+  PACKAGE standard_webhooks AT './packages/standard-webhooks';
+  PACKAGE cloudevents AT './packages/cloudevents';
 END;
 
 IMPORT oauth FROM PACKAGE oauth FILE 'build.transit';
@@ -18,6 +20,8 @@ IMPORT oidc FROM PACKAGE oidc FILE 'build.transit';
 IMPORT saml FROM PACKAGE saml FILE 'build.transit';
 IMPORT scim FROM PACKAGE scim FILE 'build.transit';
 IMPORT webauthn FROM PACKAGE webauthn FILE 'build.transit';
+IMPORT standard_webhooks FROM PACKAGE standard_webhooks FILE 'build.transit';
+IMPORT cloudevents FROM PACKAGE cloudevents FILE 'build.transit';
 
 EXPORT TARGET default AS GROUP (
   oauth.default,
@@ -27,7 +31,9 @@ EXPORT TARGET default AS GROUP (
   oidc.default,
   saml.default,
   scim.default,
-  webauthn.default
+  webauthn.default,
+  standard_webhooks.default,
+  cloudevents.default
 );
 EXPORT TEST TARGET tests AS GROUP (
   oauth.tests,
@@ -37,5 +43,7 @@ EXPORT TEST TARGET tests AS GROUP (
   oidc.tests,
   saml.tests,
   scim.tests,
-  webauthn.tests
+  webauthn.tests,
+  standard_webhooks.tests,
+  cloudevents.tests
 );

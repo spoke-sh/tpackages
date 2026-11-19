@@ -1,0 +1,37 @@
+CREATE PUBLIC MODULE Signatures() AS BEGIN
+  CREATE PUBLIC FUNCTION input(id TEXT, timestamp TEXT, body SECRET<BYTES>, endpoint OPTION<TEXT>) RETURNS SECRET<BYTES> AS BEGIN
+    REQUIRE REGEX_MATCH($id, '^[A-Za-z0-9_-]{1,200}$') AND REGEX_MATCH($timestamp, '^[0-9]{1,12}$') ELSE 'InvalidMetadata';
+    REQUIRE OPTION_ALL($endpoint, value => REGEX_MATCH(value, '^[A-Za-z0-9_-]{1,200}$')) ELSE 'InvalidEndpoint';
+    RETURN UTF8_ENCODE(CASE WHEN IS_PRESENT($endpoint) THEN REQUIRE_SOME($endpoint) || '.' ELSE '' END || $id || '.' || $timestamp || '.') || $body;
+  END;
+  CREATE PUBLIC FUNCTION sign(scheme TEXT, key SECRET<BYTES>, endpoint TEXT, id TEXT, timestamp TEXT, body SECRET<BYTES>) RETURNS TEXT AS BEGIN
+    IF $scheme = 'v1' THEN RETURN 'v1,' || BASE64_ENCODE(HMAC_SHA256($key, input($id, $timestamp, $body, NONE))); END IF;
+    REQUIRE $scheme = 'v2a' ELSE 'UnsupportedSignature';
+    RETURN 'v2a,' || BASE64_ENCODE(ED25519_SIGN($key, SHA256(input($id, $timestamp, $body, SOME($endpoint)))));
+  END;
+  CREATE PUBLIC FUNCTION verify(headers HTTP_FIELDS, body SECRET<BYTES>, endpoint TEXT,
+    keys LIST<ROW(scheme TEXT, key SECRET<BYTES>)>, now TIMESTAMP) RETURNS TEXT AS BEGIN
+    REQUIRE LENGTH($body) <= 1048576 AND LENGTH($keys) BETWEEN 1 AND 4 ELSE 'LimitsExceeded';
+    LET id = HTTP_FIELD_UNIQUE($headers, 'webhook-id');
+    LET timestamp = HTTP_FIELD_UNIQUE($headers, 'webhook-timestamp');
+    LET signed = input(id, timestamp, $body, NONE);
+    REQUIRE ABS(UNIX_SECONDS($now) - PARSE_UINT(timestamp)) <= 300 ELSE 'StaleSignature';
+    LET signatures = SPLIT(HTTP_FIELD_UNIQUE($headers, 'webhook-signature'), ' ');
+    REQUIRE LENGTH(signatures) BETWEEN 1 AND 16 ELSE 'InvalidSignature';
+    VAR valid = FALSE;
+    FOR signature IN signatures DO
+      LET pair = SPLIT(signature, ',');
+      REQUIRE LENGTH(pair) = 2 ELSE 'InvalidSignature';
+      LET bytes = BASE64_DECODE_STRICT(pair[1]);
+      FOR key IN $keys DO
+        IF key.scheme = pair[0] AND key.scheme = 'v1' THEN
+          SET valid = CONSTANT_TIME_EQUAL(bytes, HMAC_SHA256(key.key, signed)) OR valid;
+        ELSEIF key.scheme = pair[0] AND key.scheme = 'v2a' THEN
+          SET valid = ED25519_VERIFY(key.key, SHA256(input(id, timestamp, $body, SOME($endpoint))), bytes) OR valid;
+        END IF;
+      END FOR;
+    END FOR;
+    REQUIRE valid ELSE 'InvalidSignature';
+    RETURN id;
+  END;
+END;

@@ -1,0 +1,5 @@
+EXPORT MODULE Codec FROM './src/codec.transit';
+EXPORT MODULE Http FROM './src/http.transit';
+EXPORT MODULE Streams FROM './src/streams.transit';
+EXPORT TARGET default FROM './examples/build.transit';
+EXPORT TEST TARGET tests FROM './tests/build.transit';
