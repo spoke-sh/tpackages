@@ -1,6 +1,11 @@
 # Application protocol package implementation plan
 
-Status: **Draft for review — 2026-11-19.**
+Status: **Implementation authorized; first target-language profiles authored — 2026-11-19.**
+
+The twelve added roots now contain source, examples, and native tests. See the
+[implementation contracts](application-protocol-contracts.md) for profile limits,
+new native requirements, and the explicit federation peer profile. Executable
+qualification remains blocked; no protocol suite has run.
 
 Extend `tpackages` with nine application-layer protocol packages: CloudEvents,
 Standard Webhooks, tus, JSON-RPC, WebSub, CalDAV, CardDAV, JMAP, and ActivityPub.
@@ -15,7 +20,7 @@ This plan extends the [dataflow and state model plan](dataflow-refactor-plan.md)
 and [package conventions](../packages/README.md). The existing eight packages
 remain the baseline. Their implementations are unqualified on the current pins;
 new source will likewise target the intended language even where compiler/runtime
-support is incomplete. No new package is registered by this planning change.
+support is incomplete. All twelve new package roots are registered with independent build/test targets.
 
 ## Proposed scope and dependency boundaries
 

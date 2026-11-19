@@ -6,7 +6,7 @@ Officially maintained application-layer protocol packages for Transit applicatio
 clients, resource mappings, and workflows for Stripe, Salesforce, HubSpot, and
 similar services. Integrations should compose these packages.
 
-Eight packages now contain target-language source, examples, and tests. They are
+Twenty packages now contain target-language source, examples, and tests. They are
 **unqualified**: the pinned compiler rejects workspace/lazy-export syntax before
 checking their implementations. No production packages have shipped yet.
 
@@ -26,6 +26,18 @@ packages/
   saml/            SAML 2.0 federation and SSO
   scim/            user and group provisioning
   webauthn/        public-key credential registration and authentication
+  cloudevents/     event envelopes and HTTP encoding
+  standard-webhooks/  signed webhook intake and delivery
+  tus/             resumable uploads
+  json-rpc/        command-bound RPC client and server
+  websub/          subscription and content intake
+  webdav/          shared DAV client and synchronization
+  icalendar/       calendar interchange codec
+  vcard/           contact interchange codec
+  caldav/          calendar client
+  carddav/         address-book client
+  jmap/            core and optional Mail/sync/push/blob modules
+  activitypub/     scoped server federation
 ```
 
 These are independent package roots. [Package conventions](packages/README.md) define the internal directory
@@ -43,10 +55,12 @@ are optional selected modules. The [API and state migration map](docs/refactor-c
 [compiler requirement ledger](docs/compiler-requirements.md) make the upstream
 work needed to execute these packages explicit.
 
-The draft [application protocol expansion plan](docs/application-protocol-plan.md)
+The [application protocol expansion plan](docs/application-protocol-plan.md)
 covers CloudEvents, Standard Webhooks, tus, JSON-RPC, WebSub, CalDAV, CardDAV, JMAP,
-and ActivityPub, with shared DAV and format support. It defines proposed profiles,
-dataflows, state ownership, delivery phases, and qualification gates. MCP and
+and ActivityPub, with shared DAV and format support. It records the authored profiles,
+dataflows, state ownership, delivery phases, and qualification gates. The
+[implementation contracts](docs/application-protocol-contracts.md) describe the
+new native capabilities and precise limits. MCP and
 frontend hosting are excluded.
 
 | Owner | Responsibility |

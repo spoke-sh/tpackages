@@ -1,0 +1,21 @@
+DEPENDENCY library FROM WORKSPACE 'json-rpc';
+IMPORT library FROM PACKAGE library FILE 'build.transit';
+
+EXPORT MODULE Application() AS BEGIN
+  BIND SCHEMA methods TO SCHEMA_BINDING('example_rpc_methods');
+  CREATE DATAFLOW methods.echo FROM COMMAND (value TEXT) AS request AS BEGIN ATOMIC RETURN request.value; END;
+  LET api = USE library.Server(SCHEMA_BINDING('example_rpc'), COMMAND_BINDINGS('echo' => methods.echo));
+  AUTHORIZE MODULE api WITH (commands = ROLE SETTING('example.command_role'), state = ROLE SETTING('example.state_role'), effects = ROLE SETTING('example.effect_role'), reads = ROLE SETTING('example.read_role'), maintenance = ROLE SETTING('example.maintenance_role'));
+  ACTIVATE MODULE api;
+  EXPORT MODULE api AS api;
+END;
+LET application = USE Application();
+EXPORT TARGET default AS SQL OF application;
+
+CREATE PUBLIC TEST TARGET tests AS BEGIN
+  TEST 'only the selected public package closure is emitted' AS BEGIN
+    ASSERT DEPENDENCIES default EQUAL SET('json-rpc');
+    ASSERT NO OUTPUT FROM PACKAGES EXCEPT SET('json-rpc');
+    ASSERT NO RESOURCES OF KINDS (SOURCE, PUBLICATION) IN default;
+  END;
+END;
