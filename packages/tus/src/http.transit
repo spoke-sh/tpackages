@@ -1,0 +1,33 @@
+CREATE PUBLIC INTERFACE Uploads AS BEGIN
+  DATAFLOW create(length BIGINT, metadata_header TEXT) RETURNS ROW(id TEXT, expires TIMESTAMP);
+  DATAFLOW head(id TEXT) RETURNS ROW(offset BIGINT, length BIGINT, expires TIMESTAMP, metadata MAP<TEXT, BYTES>);
+  DATAFLOW patch(id TEXT, offset BIGINT, body BYTE_STREAM) RETURNS ROW(offset BIGINT, expires TIMESTAMP);
+  DATAFLOW terminate(id TEXT);
+END;
+CREATE PUBLIC MODULE Http(binding SCHEMA_BINDING, api MODULE Uploads, path TEXT, max_bytes BIGINT) AS BEGIN
+  BIND SCHEMA transport TO $binding;
+  LET version = MAP('Tus-Resumable' => '1.0.0', 'Tus-Version' => '1.0.0', 'Cache-Control' => 'no-store');
+  LET errors = MAP('OffsetConflict' => 409, 'UploadGone' => 410, 'UploadTooLarge' => 413, 'UnsupportedVersion' => 412, 'InvalidMetadata' => 400, 'BodyInterrupted' => 400, 'WriteUnknown' => 503);
+  CREATE SOURCE transport.options FROM HTTP REQUEST AS request
+    WITH (method = 'OPTIONS', path_prefix = $path, response_status = 204,
+      response_headers = MAP('Tus-Version' => '1.0.0', 'Tus-Extension' => 'creation,expiration,termination', 'Tus-Max-Size' => CAST($max_bytes AS TEXT)));
+  CREATE SOURCE transport.create FROM HTTP REQUEST AS request
+    INTO COMMAND $api.create(PARSE_UINT(HTTP_HEADER_UNIQUE(request, 'Upload-Length')), COALESCE(HTTP_HEADER_OPTION_UNIQUE(request, 'Upload-Metadata'), ''))
+    REQUIRE HTTP_HEADER_UNIQUE(request, 'Tus-Resumable') = '1.0.0' ELSE 'UnsupportedVersion'
+    WITH (method = 'POST', path = $path, authentication = 'application', max_body_bytes = 0,
+      response_status = 201, response_headers = MAP_MERGE_DISJOINT(version, MAP('Location' => $path || '/' || RESULT.id, 'Upload-Expires' => HTTP_DATE(RESULT.expires))), refusal_status = errors);
+  CREATE SOURCE transport.head FROM HTTP REQUEST AS request INTO COMMAND $api.head(HTTP_PATH_PARAMETER(request, 'id'))
+    REQUIRE HTTP_HEADER_UNIQUE(request, 'Tus-Resumable') = '1.0.0' ELSE 'UnsupportedVersion'
+    WITH (method = 'HEAD', path = $path || '/{id}', authentication = 'application', max_body_bytes = 0,
+      response_status = 200, response_headers = MAP_MERGE_DISJOINT(version, MAP('Upload-Offset' => CAST(RESULT.offset AS TEXT), 'Upload-Length' => CAST(RESULT.length AS TEXT), 'Upload-Expires' => HTTP_DATE(RESULT.expires))), refusal_status = errors);
+  CREATE SOURCE transport.patch FROM HTTP REQUEST AS request
+    INTO COMMAND $api.patch(HTTP_PATH_PARAMETER(request, 'id'), PARSE_UINT(HTTP_HEADER_UNIQUE(request, 'Upload-Offset')), HTTP_BODY_STREAM(request))
+    REQUIRE HTTP_HEADER_UNIQUE(request, 'Tus-Resumable') = '1.0.0' ELSE 'UnsupportedVersion'
+    REQUIRE HTTP_HEADER_UNIQUE(request, 'Content-Type') = 'application/offset+octet-stream' ELSE 'UnsupportedMediaType'
+    WITH (method = 'PATCH', path = $path || '/{id}', authentication = 'application', max_body_bytes = $max_bytes,
+      request_storage = 'native_stream', response_status = 204, response_headers = MAP_MERGE_DISJOINT(version, MAP('Upload-Offset' => CAST(RESULT.offset AS TEXT), 'Upload-Expires' => HTTP_DATE(RESULT.expires))), refusal_status = MAP_SET(errors, 'UnsupportedMediaType', 415));
+  CREATE SOURCE transport.delete FROM HTTP REQUEST AS request INTO COMMAND $api.terminate(HTTP_PATH_PARAMETER(request, 'id'))
+    REQUIRE HTTP_HEADER_UNIQUE(request, 'Tus-Resumable') = '1.0.0' ELSE 'UnsupportedVersion'
+    WITH (method = 'DELETE', path = $path || '/{id}', authentication = 'application', max_body_bytes = 0,
+      response_status = 204, response_headers = version, refusal_status = errors);
+END;

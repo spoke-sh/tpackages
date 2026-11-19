@@ -1,0 +1,21 @@
+CREATE PUBLIC INTERFACE Federation AS BEGIN
+  DATAFLOW receive(headers HTTP_FIELDS, body SECRET<BYTES>) RETURNS TEXT;
+  DATAFLOW actor() RETURNS JSON;
+  DATAFLOW collection(direction TEXT, after TEXT) RETURNS JSON;
+  DATAFLOW read(id TEXT) RETURNS JSON;
+END;
+CREATE PUBLIC MODULE Http(binding SCHEMA_BINDING, api MODULE Federation, actor_path TEXT, origin TEXT) AS BEGIN
+  BIND SCHEMA transport TO $binding;
+  CREATE SOURCE transport.inbox FROM HTTP REQUEST AS request INTO COMMAND $api.receive(HTTP_HEADERS(request), HTTP_SECRET_BODY(request))
+    WITH (method = 'POST', path = $actor_path || '/inbox', authentication = 'application_endpoint', max_body_bytes = 1048576,
+      response_status = 202, request_storage = 'protected_transient', capture = 'redacted_metadata', response_cache = 'no-store');
+  CREATE SOURCE transport.actor FROM HTTP REQUEST AS request INTO COMMAND $api.actor()
+    WITH (method = 'GET', path = $actor_path, max_body_bytes = 0, response_status = 200, response_body = RESULT, response_headers = MAP('Content-Type' => 'application/activity+json'));
+  CREATE SOURCE transport.outbox FROM HTTP REQUEST AS request INTO COMMAND $api.collection('outbound', COALESCE(HTTP_QUERY_OPTION_UNIQUE(request, 'after'), ''))
+    WITH (method = 'GET', path = $actor_path || '/outbox', max_body_bytes = 0, response_status = 200, response_body = RESULT, response_headers = MAP('Content-Type' => 'application/activity+json'));
+  CREATE SOURCE transport.inbox_read FROM HTTP REQUEST AS request INTO COMMAND $api.collection('inbound', COALESCE(HTTP_QUERY_OPTION_UNIQUE(request, 'after'), ''))
+    WITH (method = 'GET', path = $actor_path || '/inbox', authentication = 'application', max_body_bytes = 0,
+      response_status = 200, response_body = RESULT, response_cache = 'no-store', response_headers = MAP('Content-Type' => 'application/activity+json'));
+  CREATE SOURCE transport.object FROM HTTP REQUEST AS request INTO COMMAND $api.read($origin || HTTP_PATH(request))
+    WITH (method = 'GET', path = $actor_path || '/objects/{id}', max_body_bytes = 0, response_status = 200, response_body = RESULT, response_headers = MAP('Content-Type' => 'application/activity+json'));
+END;

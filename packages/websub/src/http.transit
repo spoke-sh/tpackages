@@ -1,0 +1,17 @@
+CREATE PUBLIC INTERFACE Subscriber AS BEGIN
+  DATAFLOW verify(path TEXT, mode TEXT, topic TEXT, challenge TEXT, seconds BIGINT) RETURNS TEXT;
+  DATAFLOW receive(path TEXT, signature TEXT, content_type TEXT, body SECRET<BYTES>);
+END;
+CREATE PUBLIC MODULE Http(binding SCHEMA_BINDING, api MODULE Subscriber) AS BEGIN
+  BIND SCHEMA transport TO $binding;
+  CREATE SOURCE transport.verify FROM HTTP REQUEST AS request
+    INTO COMMAND $api.verify(HTTP_PATH(request), HTTP_QUERY_UNIQUE(request, 'hub.mode'), HTTP_QUERY_UNIQUE(request, 'hub.topic'),
+      HTTP_QUERY_UNIQUE(request, 'hub.challenge'), PARSE_UINT(COALESCE(HTTP_QUERY_OPTION_UNIQUE(request, 'hub.lease_seconds'), '1')))
+    WITH (method = 'GET', path = '/websub/{capability}', authentication = 'application_endpoint', max_body_bytes = 0,
+      response_status = 200, response_body = RESULT, response_headers = MAP('Content-Type' => 'application/octet-stream', 'X-Content-Type-Options' => 'nosniff'),
+      request_storage = 'protected_transient', capture = 'redacted_metadata', response_cache = 'no-store');
+  CREATE SOURCE transport.receive FROM HTTP REQUEST AS request
+    INTO COMMAND $api.receive(HTTP_PATH(request), HTTP_HEADER_UNIQUE(request, 'X-Hub-Signature'), HTTP_HEADER_UNIQUE(request, 'Content-Type'), HTTP_SECRET_BODY(request))
+    WITH (method = 'POST', path = '/websub/{capability}', authentication = 'application_endpoint', max_body_bytes = 1048576,
+      response_status = 204, response_cache = 'no-store', request_storage = 'protected_transient', capture = 'redacted_metadata');
+END;

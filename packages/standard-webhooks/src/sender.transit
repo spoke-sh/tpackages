@@ -1,0 +1,73 @@
+IMPORT signature FROM './signatures.transit';
+CREATE PUBLIC MODULE Sender(binding SCHEMA_BINDING, endpoint_id TEXT, url TEXT, key_reference TEXT, scheme TEXT, previous_keys LIST<TEXT>) AS BEGIN
+  BIND SCHEMA sender TO $binding;
+  REQUIRE HTTPS_URL($url, SET(URL_HOST($url))) AND $scheme IN ('v1', 'v2a') AND LENGTH($previous_keys) <= 3 ELSE 'InvalidConfiguration';
+  LET signatures = USE signature.Signatures();
+  CREATE PRIVATE DOCUMENT sender.policy (id TEXT PRIMARY KEY, enabled BOOLEAN) WITH (profile = 'versioned');
+  INSERT INTO sender.policy VALUES ('endpoint', TRUE) ON CONFLICT DO NOTHING;
+  CREATE PRIVATE TABLE sender.deliveries (id TEXT PRIMARY KEY, owner OWNER, payload PROTECTED_REF, content_type TEXT, deadline TIMESTAMP, status TEXT);
+  CREATE PRIVATE TABLE sender.receipts (delivery TEXT REFERENCES sender.deliveries(id), attempt BIGINT, outcome TEXT, status OPTION<BIGINT>, PRIMARY KEY(delivery, attempt));
+  CREATE PRIVATE QUEUE sender.jobs (id TEXT, owner OWNER, attempt BIGINT, signed_at TIMESTAMP) WITH (max_attempts = 1);
+  CREATE PRIVATE STREAM sender.results (event_id TEXT, owner OWNER, delivery TEXT, status TEXT)
+    WITH (retention = 'unlimited', partition_by = 'delivery', disclosure = 'current_owner');
+  CREATE SINK sender.http INTO HTTP WITH (endpoint = $url, method = 'POST', request_encoding = 'bytes', response = 'bytes',
+    response_max_bytes = 4096, request_timeout = '20s', follow_redirects = FALSE, allowed_hosts = SET(URL_HOST($url)),
+    capture = 'redacted_metadata', max_attempts = 1, unknown_outcome = 'retain');
+  CREATE DATAFLOW sender.send FROM COMMAND (body SECRET<BYTES>, content_type TEXT) AS request
+    WITH (idempotency = 'original_owner_request') AS BEGIN ATOMIC
+    REQUIRE LENGTH(request.body) <= 1048576 AND (SELECT ONE enabled FROM sender.policy WHERE id = 'endpoint').enabled ELSE 'DeliveryRefused';
+    REQUIRE MEDIA_TYPE_VALID(request.content_type) ELSE 'InvalidContentType';
+    LET id = OPERATION_ID(CURRENT_REQUEST_ID(), 'message');
+    INSERT INTO sender.deliveries VALUES (id, CURRENT_OWNER(), PROTECT(request.body, 'webhook.send', NOW() + DAYS(4)), request.content_type, NOW() + DAYS(3), 'pending');
+    ENQUEUE INTO sender.jobs VALUES (id, CURRENT_OWNER(), 0, NOW());
+    RETURN id;
+  END;
+  CREATE DATAFLOW sender.deliver FROM QUEUE sender.jobs AS job AS BEGIN
+    LET delivery = SELECT ONE * FROM sender.deliveries WHERE id = job.id AND owner = CURRENT_OWNER();
+    IF delivery.status <> 'pending' THEN RETURN; END IF;
+    REQUIRE job.owner = CURRENT_OWNER() ELSE 'Forbidden';
+    REQUIRE delivery.deadline > NOW() AND (SELECT ONE enabled FROM sender.policy WHERE id = 'endpoint').enabled ELSE 'DeliveryExpired';
+    LET key = SECRET($key_reference);
+    LET old_keys = MAP_LIST($previous_keys, reference => SECRET(reference));
+    -- Native continuation freezes this attempt's prepared request. A delayed
+    -- queue wake signs at dispatch time, not at its original eligibility time.
+    LET timestamp = CAST(UNIX_SECONDS(NOW()) AS TEXT);
+    LET body = UNPROTECT(delivery.payload, 'webhook.send');
+    LET signed = APPEND([signatures.sign($scheme, key, $endpoint_id, job.id, timestamp, body)],
+      MAP_LIST(old_keys, previous => signatures.sign($scheme, previous, $endpoint_id, job.id, timestamp, body)));
+    LET headers = MAP('Content-Type' => delivery.content_type, 'webhook-id' => job.id, 'webhook-timestamp' => timestamp,
+      'webhook-signature' => JOIN(signed, ' '));
+    LET result = EXECUTE SINK sender.http EFFECT OPERATION_ID(job.id, CAST(job.attempt AS TEXT))
+      GUARD SECRET_CURRENT(key) AND ALL(old_keys, SECRET_CURRENT) AND delivery.deadline > NOW() AND (SELECT ONE enabled FROM sender.policy WHERE id = 'endpoint').enabled
+      HEADERS headers BODY body ON REPLAY OBSERVE ONLY;
+    BEGIN ATOMIC
+      INSERT INTO sender.receipts VALUES (job.id, job.attempt, result.outcome, result.status) ON CONFLICT DO ASSERT SAME ROW;
+      LET delivered = result.outcome = 'known' AND result.status BETWEEN 200 AND 299;
+      LET disabled = result.outcome = 'known' AND result.status = 410;
+      LET delay = MAX(MIN(POWER(2, job.attempt) * 30, 21600), HTTP_RETRY_AFTER_SECONDS(result.headers, NOW(), 21600));
+      IF NOT delivered AND NOT disabled AND job.attempt < 11 AND NOW() + SECONDS(delay) < delivery.deadline THEN
+        ENQUEUE INTO sender.jobs VALUES (job.id, job.owner, job.attempt + 1, NOW() + SECONDS(delay)) AVAILABLE AT NOW() + SECONDS(delay);
+      ELSE
+        LET next_status = CASE WHEN delivered THEN 'acknowledged' WHEN disabled THEN 'disabled' ELSE 'exhausted' END;
+        UPDATE sender.deliveries SET status = next_status WHERE id = job.id AND status = 'pending';
+        IF disabled THEN UPDATE sender.policy SET enabled = FALSE WHERE id = 'endpoint'; END IF;
+        PRODUCE INTO sender.results VALUES (job.id, job.owner, job.id, next_status);
+      END IF;
+    END;
+  ON FAILURE failure
+    BEGIN ATOMIC
+      IF (SELECT ONE status FROM sender.deliveries WHERE id = job.id).status = 'pending' THEN
+        UPDATE sender.deliveries SET status = 'refused' WHERE id = job.id;
+        PRODUCE INTO sender.results VALUES (job.id, job.owner, job.id, 'refused');
+      END IF;
+    END;
+  END;
+  CREATE PUBLIC VIEW status AS SELECT id, status, deadline FROM sender.deliveries WHERE owner = CURRENT_OWNER();
+  CREATE PUBLIC VIEW policy AS SELECT enabled, DOCUMENT_REVISION(sender.policy, 'endpoint') AS revision FROM sender.policy WHERE id = 'endpoint';
+  CREATE DATAFLOW sender.set_enabled FROM COMMAND (enabled BOOLEAN, revision REVISION) AS request AS BEGIN ATOMIC
+    UPDATE sender.policy SET enabled = request.enabled WHERE id = 'endpoint' IF REVISION = request.revision;
+  END;
+  EXPORT DATAFLOW sender.send AS send;
+  EXPORT DATAFLOW sender.set_enabled AS set_enabled;
+  EXPORT STREAM sender.results AS results;
+END;

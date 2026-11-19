@@ -1,0 +1,35 @@
+IMPORT library FROM '../build.transit';
+IMPORT source FROM '../src/codec.transit';
+LET codec = USE source.Codec();
+TEST 'missing id is a notification while null id requires a response' USING MODULES (application) AS BEGIN
+  ASSERT NOT IS_PRESENT(codec.request(JSON '{"jsonrpc":"2.0","method":"echo"}').id);
+  ASSERT codec.request(JSON '{"jsonrpc":"2.0","id":null,"method":"echo"}').id = SOME(JSON 'null');
+END;
+
+TEST 'an outbound notification batch accepts an empty response and does not replay unknown calls' USING MODULES (application) AS BEGIN
+  LET client = USE library.Client(SCHEMA_BINDING('rpc_client'), 'https://rpc.example.test/', HTTP_AUTH_SETTING('example.rpc'));
+  ACTIVATE TEST MODULE client;
+  MOCK SINK client.http RETURNS STATUS 204 BODY BYTES '';
+  LET batch_id = CALL client.batch([ROW(method => 'notify', params => JSON '{"value":1}', notification => TRUE)]);
+  DRAIN MODULE client WITHIN 100 STEPS;
+  ASSERT (CALL client.read(batch_id)).state = 'acknowledged';
+  MOCK SINK client.http RETURNS OUTCOME 'unknown';
+  LET call_id = CALL client.call('change', JSON '{}', FALSE);
+  DRAIN MODULE client WITHIN 100 STEPS;
+  RESTART;
+  DRAIN MODULE client WITHIN 100 STEPS;
+  ASSERT (CALL client.read(call_id)).state = 'unknown';
+  ASSERT SINK client.http DISPATCH COUNT = 2;
+END;
+TEST 'mixed batches preserve independent responses and omit notifications' USING MODULES (application) AS BEGIN
+  ACTIVATE TEST MODULE application.api;
+  LET result = CALL application.api.receive(UTF8_ENCODE('[{"jsonrpc":"2.0","id":1,"method":"echo","params":{"value":"hello"}},{"jsonrpc":"2.0","method":"echo","params":{"value":"notice"}},7]'));
+  ASSERT JSON_ARRAY_LENGTH(REQUIRE_SOME(result)) = 2;
+  ASSERT JSON_GET(JSON_ARRAY_AT(REQUIRE_SOME(result), 0), 'result') = JSON '"hello"';
+  ASSERT JSON_GET(JSON_GET(JSON_ARRAY_AT(REQUIRE_SOME(result), 1), 'error'), 'code') = JSON '-32600';
+  ASSERT CALL application.api.receive(UTF8_ENCODE('[]')) = SOME(codec.error(JSON 'null', -32600, 'Invalid Request'));
+END;
+TEST 'malformed response ids and ambiguous result/error refuse' USING MODULES (application) AS BEGIN
+  ASSERT codec.response(JSON '{"jsonrpc":"2.0","id":"1","result":null}', JSON '1') FAILS WITH 'InvalidResponse';
+  ASSERT codec.response(JSON '{"jsonrpc":"2.0","id":1,"result":null,"error":{"code":1,"message":"x"}}', JSON '1') FAILS WITH 'InvalidResponse';
+END;

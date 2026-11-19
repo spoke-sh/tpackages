@@ -1,0 +1,19 @@
+DEPENDENCY caldav FROM WORKSPACE 'caldav';
+DEPENDENCY carddav FROM WORKSPACE 'carddav';
+IMPORT caldav FROM PACKAGE caldav FILE 'build.transit';
+IMPORT carddav FROM PACKAGE carddav FILE 'build.transit';
+CREATE MODULE Application() AS BEGIN
+  LET calendars = USE caldav.Client(SCHEMA_BINDING('calendar_account'), 'https://calendar.example.test', HTTP_AUTH_SETTING('calendar'));
+  LET contacts = USE carddav.Client(SCHEMA_BINDING('contact_account'), 'https://contacts.example.test', HTTP_AUTH_SETTING('contacts'));
+  EXPORT MODULE calendars AS calendars;
+  EXPORT MODULE contacts AS contacts;
+END;
+LET application = USE Application();
+EXPORT TARGET default AS SQL OF application;
+CREATE PUBLIC TEST TARGET tests AS BEGIN
+  TEST 'DAV consumers share protocol code and retain independent resource bindings' AS BEGIN
+    ASSERT DEPENDENCIES default EQUAL SET('caldav','carddav','webdav','icalendar','vcard');
+    ASSERT DISTINCT RESOURCE OWNERS application.calendars, application.contacts;
+    ASSERT NO OUTPUT FROM PACKAGES EXCEPT SET('caldav','carddav','webdav','icalendar','vcard');
+  END;
+END;

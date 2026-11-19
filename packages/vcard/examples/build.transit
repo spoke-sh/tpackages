@@ -1,0 +1,8 @@
+IMPORT library FROM '../build.transit';
+
+EXPORT MODULE Application() AS BEGIN
+  LET codec = USE library.Codec();
+  EXPORT MODULE codec AS codec;
+END;
+LET application = USE Application();
+EXPORT TARGET default AS SQL OF application;

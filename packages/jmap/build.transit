@@ -1,0 +1,7 @@
+EXPORT MODULE Core FROM './src/core.transit';
+EXPORT MODULE Mail FROM './src/mail.transit';
+EXPORT MODULE Sync FROM './src/sync.transit';
+EXPORT MODULE Push FROM './src/push.transit';
+EXPORT MODULE Blobs FROM './src/blobs.transit';
+EXPORT TARGET default FROM './examples/build.transit';
+EXPORT TEST TARGET tests FROM './tests/build.transit';

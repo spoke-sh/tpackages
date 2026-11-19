@@ -1,0 +1,12 @@
+CREATE PUBLIC INTERFACE Receiver AS BEGIN
+  DATAFLOW accept(headers HTTP_FIELDS, body SECRET<BYTES>) RETURNS TEXT;
+END;
+CREATE PUBLIC MODULE Http(binding SCHEMA_BINDING, receiver MODULE Receiver, path TEXT) AS BEGIN
+  BIND SCHEMA transport TO $binding;
+  CREATE SOURCE transport.receive FROM HTTP REQUEST AS request
+    INTO COMMAND $receiver.accept(HTTP_HEADERS(request), HTTP_SECRET_BODY(request))
+    WITH (method = 'POST', path = $path, authentication = 'application_endpoint', admission = 'signature',
+      max_body_bytes = 1048576, request_storage = 'protected_transient', capture = 'redacted_metadata',
+      response_status = 204, response_body = NONE, response_cache = 'no-store');
+  EXPORT SOURCE transport.receive AS receive;
+END;

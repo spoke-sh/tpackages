@@ -1,0 +1,35 @@
+IMPORT library FROM '../build.transit';
+IMPORT source FROM '../src/discovery.transit';
+LET discovery = USE source.Discovery();
+TEST 'HTTP discovery takes precedence over body content' USING MODULES (application) AS BEGIN
+  LET links = discovery.links(MAP('Link' => '<https://hub.example.test/>; rel="hub", <https://publisher.example.test/feed>; rel="self"'), UTF8_ENCODE('<html></html>'), 'text/html', 'https://publisher.example.test/feed');
+  ASSERT links.topic = 'https://publisher.example.test/feed';
+  ASSERT links.hubs = ['https://hub.example.test/'];
+END;
+
+TEST 'unsubscription uses the verified callback and pending subscriptions can be cancelled' USING MODULES (application) AS BEGIN
+  ACTIVATE TEST MODULE application.api;
+  MOCK SINK application.api.http RETURNS STATUS 202 BODY BYTES '';
+  LET id = CALL application.api.subscribe('https://publisher.example.test/feed', 'https://hub.example.test/');
+  DRAIN MODULE application.api WITHIN 100 STEPS;
+  LET sent = TEST PROTECTED REQUEST application.api.http AT 1;
+  LET callback = sent.fields['hub.callback'];
+  ASSERT CALL application.api.verify(URL_PATH(callback), 'subscribe', 'https://publisher.example.test/feed', 'verified', 600) = 'verified';
+  CALL application.api.unsubscribe(id);
+  DRAIN MODULE application.api WITHIN 100 STEPS;
+  ASSERT (TEST PROTECTED REQUEST application.api.http AT 2).fields['hub.callback'] = callback;
+  ASSERT (TEST PROTECTED REQUEST application.api.http AT 2).fields['hub.mode'] = 'unsubscribe';
+  LET pending = CALL application.api.subscribe('https://publisher.example.test/other', 'https://hub.example.test/');
+  CALL application.api.unsubscribe(pending);
+  ASSERT STREAM_COUNT(application.api.results WHERE kind = 'cancelled_before_verification') = 1;
+END;
+TEST 'unsolicited verification and unsafe challenge reflection refuse' USING MODULES (application) AS BEGIN
+  ACTIVATE TEST MODULE application.api;
+  ASSERT CALL application.api.verify('/websub/unknown', 'subscribe', 'https://publisher.example.test/feed', 'challenge', 600) FAILS;
+  ASSERT STREAM_COUNT(application.api.results) = 0;
+END;
+TEST 'discovery refuses credentials crossing an unapproved destination' USING MODULES (application) AS BEGIN
+  ACTIVATE TEST MODULE application.api;
+  ASSERT CALL application.api.discover('https://unapproved.example.test/feed') FAILS WITH 'DestinationDenied';
+  ASSERT EFFECT_COUNT(application.api) = 0;
+END;

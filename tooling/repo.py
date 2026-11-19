@@ -20,6 +20,18 @@ PACKAGES = {
     "saml": set(),
     "scim": set(),
     "webauthn": set(),
+    "activitypub": set(),
+    "jmap": set(),
+    "carddav": {"vcard", "webdav"},
+    "caldav": {"icalendar", "webdav"},
+    "vcard": set(),
+    "icalendar": set(),
+    "webdav": set(),
+    "websub": set(),
+    "json-rpc": set(),
+    "tus": set(),
+    "standard-webhooks": set(),
+    "cloudevents": set(),
 }
 
 

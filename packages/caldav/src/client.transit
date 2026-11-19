@@ -1,0 +1,80 @@
+IMPORT dav FROM PACKAGE webdav FILE 'build.transit';
+IMPORT format FROM PACKAGE icalendar FILE 'build.transit';
+CREATE PUBLIC MODULE Client(binding SCHEMA_BINDING, origin TEXT, authorization HTTP_AUTH_CAPABILITY) AS BEGIN
+  BIND SCHEMA protocol TO $binding;
+  LET wire = USE dav.Client(CHILD_BINDING($binding, 'http'), $origin, $authorization);
+  LET xml = USE dav.Codec();
+  LET codec = USE format.Codec();
+  CREATE DATAFLOW protocol.discover FROM COMMAND (url TEXT) AS request WITH (continuation = 'durable') AS BEGIN
+    LET first = CALL wire.request('PROPFIND', request.url, MAP('Depth' => '0', 'Content-Type' => 'application/xml'), xml.propfind(['{DAV:}current-user-principal', '{urn:ietf:params:xml:ns:caldav}calendar-home-set']));
+    REQUIRE first.outcome = 'known' AND first.status = 207 ELSE 'DiscoveryFailed';
+    VAR resource = ONLY(xml.multistatus(first.body, request.url, SET(URL_HOST($origin))).resources);
+    IF NOT MAP_HAS(resource.properties, '{urn:ietf:params:xml:ns:caldav}calendar-home-set') THEN
+      LET principal = URL_RESOLVE(request.url, XML_TEXT(ONLY(XML_CHILDREN(MAP_GET(resource.properties, '{DAV:}current-user-principal'), '{DAV:}href'))));
+      LET next = CALL wire.request('PROPFIND', principal, MAP('Depth' => '0', 'Content-Type' => 'application/xml'), xml.propfind(['{urn:ietf:params:xml:ns:caldav}calendar-home-set']));
+      REQUIRE next.outcome = 'known' AND next.status = 207 ELSE 'DiscoveryFailed';
+      SET resource = ONLY(xml.multistatus(next.body, principal, SET(URL_HOST($origin))).resources);
+    END IF;
+    LET home = URL_RESOLVE(resource.href, XML_TEXT(ONLY(XML_CHILDREN(MAP_GET(resource.properties, '{urn:ietf:params:xml:ns:caldav}calendar-home-set'), '{DAV:}href'))));
+    LET listing = CALL wire.request('PROPFIND', home, MAP('Depth' => '1', 'Content-Type' => 'application/xml'),
+      xml.propfind(['{DAV:}displayname', '{DAV:}resourcetype', '{DAV:}supported-report-set', '{urn:ietf:params:xml:ns:caldav}supported-calendar-component-set']));
+    REQUIRE listing.outcome = 'known' AND listing.status = 207 ELSE 'DiscoveryFailed';
+    RETURN FILTER(xml.multistatus(listing.body, home, SET(URL_HOST($origin))).resources,
+      item => MAP_HAS(item.properties, '{DAV:}resourcetype') AND XML_HAS_NAME(MAP_GET(item.properties, '{DAV:}resourcetype'), '{urn:ietf:params:xml:ns:caldav}calendar'));
+  END;
+  CREATE DATAFLOW protocol.get FROM COMMAND (url TEXT) AS request WITH (continuation = 'durable') AS BEGIN
+    LET receipt = CALL wire.request('GET', request.url, MAP('Accept' => 'text/calendar'), BYTES '');
+    REQUIRE receipt.outcome = 'known' AND receipt.status = 200 ELSE 'ReadFailed';
+    RETURN ROW(value => codec.decode(receipt.body), etag => HTTP_FIELD_UNIQUE(receipt.headers, 'ETag'));
+  END;
+  CREATE DATAFLOW protocol.put FROM COMMAND (url TEXT, body BYTES, etag OPTION<TEXT>) AS request WITH (continuation = 'durable') AS BEGIN
+    LET value = codec.decode(request.body);
+    -- iCalendar validation and unknown-property preservation occur in the codec.
+    LET headers = MAP('Content-Type' => 'text/calendar');
+    LET conditional = CASE WHEN IS_PRESENT(request.etag) THEN MAP_SET(headers, 'If-Match', REQUIRE_SOME(request.etag)) ELSE MAP_SET(headers, 'If-None-Match', '*') END;
+    LET receipt = CALL wire.request('PUT', request.url, conditional, request.body);
+    REQUIRE receipt.outcome <> 'unknown' ELSE 'WriteUnknown';
+    REQUIRE receipt.status <> 412 ELSE 'VersionConflict';
+    REQUIRE receipt.outcome = 'known' AND receipt.status IN (200,201,204) ELSE 'WriteRefused';
+    RETURN HTTP_FIELD_OPTION_UNIQUE(receipt.headers, 'ETag');
+  END;
+  CREATE DATAFLOW protocol.delete FROM COMMAND (url TEXT, etag TEXT) AS request WITH (continuation = 'durable') AS BEGIN
+    LET receipt = CALL wire.request('DELETE', request.url, MAP('If-Match' => request.etag), BYTES '');
+    REQUIRE receipt.outcome <> 'unknown' ELSE 'WriteUnknown';
+    REQUIRE receipt.status <> 412 ELSE 'VersionConflict';
+    REQUIRE receipt.outcome = 'known' AND receipt.status IN (200,204) ELSE 'WriteRefused';
+  END;
+  CREATE DATAFLOW protocol.multiget FROM COMMAND (collection TEXT, hrefs LIST<TEXT>) AS request WITH (continuation = 'durable') AS BEGIN
+    REQUIRE LENGTH(request.hrefs) BETWEEN 1 AND 100 ELSE 'TooManyResources';
+    LET body = XML_ENCODE(XML_ELEMENT('{urn:ietf:params:xml:ns:caldav}calendar-multiget', MAP(), APPEND([
+      XML_ELEMENT('{DAV:}prop', MAP(), [XML_ELEMENT('{DAV:}getetag', MAP(), []), XML_ELEMENT('{urn:ietf:params:xml:ns:caldav}calendar-data', MAP(), [])])],
+      MAP_LIST(request.hrefs, href => XML_TEXT_ELEMENT('{DAV:}href', href)))));
+    LET receipt = CALL wire.request('REPORT', request.collection, MAP('Depth' => '1', 'Content-Type' => 'application/xml'), body);
+    REQUIRE receipt.outcome = 'known' AND receipt.status = 207 ELSE 'QueryFailed';
+    RETURN xml.multistatus(receipt.body, request.collection, SET(URL_HOST($origin)));
+  END;
+  EXPORT DATAFLOW protocol.discover AS discover;
+  EXPORT DATAFLOW protocol.get AS get;
+  EXPORT DATAFLOW protocol.put AS put;
+  EXPORT DATAFLOW protocol.delete AS delete;
+  EXPORT DATAFLOW protocol.multiget AS multiget;
+  EXPORT STREAM wire.results AS results;
+  EXPORT DATAFLOW wire.request AS request;
+  CREATE DATAFLOW protocol.query FROM COMMAND (collection TEXT, start TEXT, finish TEXT) AS request WITH (continuation = 'durable') AS BEGIN
+    REQUIRE REGEX_MATCH(request.start, '^[0-9]{8}T[0-9]{6}Z$') AND REGEX_MATCH(request.finish, '^[0-9]{8}T[0-9]{6}Z$') AND request.start < request.finish ELSE 'InvalidRange';
+    LET body = XML_ENCODE(XML_ELEMENT('{urn:ietf:params:xml:ns:caldav}calendar-query', MAP(), [
+      XML_ELEMENT('{DAV:}prop', MAP(), [XML_ELEMENT('{DAV:}getetag', MAP(), []), XML_ELEMENT('{urn:ietf:params:xml:ns:caldav}calendar-data', MAP(), [])]),
+      XML_ELEMENT('{urn:ietf:params:xml:ns:caldav}filter', MAP(), [XML_ELEMENT('{urn:ietf:params:xml:ns:caldav}comp-filter', MAP('name' => 'VCALENDAR'), [
+        XML_ELEMENT('{urn:ietf:params:xml:ns:caldav}comp-filter', MAP('name' => 'VEVENT'), [XML_ELEMENT('{urn:ietf:params:xml:ns:caldav}time-range', MAP('start' => request.start, 'end' => request.finish), [])])])])]));
+    LET receipt = CALL wire.request('REPORT', request.collection, MAP('Depth' => '1', 'Content-Type' => 'application/xml'), body);
+    REQUIRE receipt.outcome = 'known' AND receipt.status = 207 ELSE 'QueryFailed';
+    RETURN xml.multistatus(receipt.body, request.collection, SET(URL_HOST($origin)));
+  END;
+  EXPORT DATAFLOW protocol.query AS query;
+END;
+CREATE PUBLIC MODULE Mirror(binding SCHEMA_BINDING, client MODULE dav.Requests, collection TEXT, supports_sync BOOLEAN) AS BEGIN
+  LET mirror = USE dav.Sync($binding, $client, $collection, $supports_sync);
+  EXPORT DATAFLOW mirror.refresh AS refresh;
+  EXPORT DATAFLOW mirror.read AS read;
+  EXPORT STREAM mirror.changes AS changes;
+END;

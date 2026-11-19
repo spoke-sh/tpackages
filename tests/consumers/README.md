@@ -33,3 +33,13 @@ Frozen external rebuilds, mixed-revision rejection, rename preservation, and
 state migrations remain qualification gates in the implementation plan. They need
 a successfully resolved/compiled package first; no synthetic passing evidence or
 invented prior migration basis is checked in.
+
+## Application protocols
+
+`protocol-*` fixtures select each of the twelve new roots independently through
+its public entry. They assert dependency closure and absence of optional HTTP
+Sources/Publications; codec-only consumers also assert that no state or effects
+are emitted. `events-webhooks` composes event envelopes with signed delivery,
+`dav-composition` shares DAV code between independent calendar/contact accounts,
+and `jmap-mail` selects Mail synchronization without Push or blob transfer.
+These are native compiler assertions, currently blocked before execution.

@@ -1,0 +1,25 @@
+DEPENDENCY events FROM WORKSPACE 'cloudevents';
+DEPENDENCY webhooks FROM WORKSPACE 'standard-webhooks';
+IMPORT events FROM PACKAGE events FILE 'build.transit';
+IMPORT webhooks FROM PACKAGE webhooks FILE 'build.transit';
+CREATE MODULE Application() AS BEGIN
+  LET codec = USE events.Codec();
+  LET sender = USE webhooks.Sender(SCHEMA_BINDING('events_sender'), 'endpoint_example', 'https://receiver.example.test/events', 'example.webhook.key', 'v1', []);
+  BIND SCHEMA app TO SCHEMA_BINDING('events_application');
+  CREATE DATAFLOW app.publish FROM COMMAND (id TEXT, type TEXT, data JSON) AS request WITH (continuation = 'durable') AS BEGIN
+    LET event = codec.decode(JSON_ENCODE(JSON_OBJECT('specversion', '1.0', 'source', '/application', 'id', request.id, 'type', request.type, 'data', request.data)));
+    RETURN CALL sender.send(codec.encode(event), 'application/cloudevents+json');
+  END;
+  AUTHORIZE MODULE sender WITH (commands = ROLE SETTING('example.command_role'), state = ROLE SETTING('example.state_role'), effects = ROLE SETTING('example.effect_role'), reads = ROLE SETTING('example.read_role'), maintenance = ROLE SETTING('example.maintenance_role'));
+  ACTIVATE MODULE sender;
+  EXPORT DATAFLOW app.publish AS publish;
+  EXPORT STREAM sender.results AS results;
+END;
+LET application = USE Application();
+EXPORT TARGET default AS SQL OF application;
+CREATE PUBLIC TEST TARGET tests AS BEGIN
+  TEST 'the composition contains exactly the two independent protocols' AS BEGIN
+    ASSERT DEPENDENCIES default EQUAL SET('cloudevents', 'standard-webhooks');
+    ASSERT NO OUTPUT FROM PACKAGES EXCEPT SET('cloudevents', 'standard-webhooks');
+  END;
+END;

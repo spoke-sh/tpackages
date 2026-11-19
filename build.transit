@@ -8,6 +8,18 @@ WORKSPACE tpackages AS BEGIN
   PACKAGE saml AT './packages/saml';
   PACKAGE scim AT './packages/scim';
   PACKAGE webauthn AT './packages/webauthn';
+  PACKAGE activitypub AT './packages/activitypub';
+  PACKAGE jmap AT './packages/jmap';
+  PACKAGE carddav AT './packages/carddav';
+  PACKAGE caldav AT './packages/caldav';
+  PACKAGE vcard AT './packages/vcard';
+  PACKAGE icalendar AT './packages/icalendar';
+  PACKAGE webdav AT './packages/webdav';
+  PACKAGE websub AT './packages/websub';
+  PACKAGE json_rpc AT './packages/json-rpc';
+  PACKAGE tus AT './packages/tus';
+  PACKAGE standard_webhooks AT './packages/standard-webhooks';
+  PACKAGE cloudevents AT './packages/cloudevents';
 END;
 
 IMPORT oauth FROM PACKAGE oauth FILE 'build.transit';
@@ -18,6 +30,18 @@ IMPORT oidc FROM PACKAGE oidc FILE 'build.transit';
 IMPORT saml FROM PACKAGE saml FILE 'build.transit';
 IMPORT scim FROM PACKAGE scim FILE 'build.transit';
 IMPORT webauthn FROM PACKAGE webauthn FILE 'build.transit';
+IMPORT activitypub FROM PACKAGE activitypub FILE 'build.transit';
+IMPORT jmap FROM PACKAGE jmap FILE 'build.transit';
+IMPORT carddav FROM PACKAGE carddav FILE 'build.transit';
+IMPORT caldav FROM PACKAGE caldav FILE 'build.transit';
+IMPORT vcard FROM PACKAGE vcard FILE 'build.transit';
+IMPORT icalendar FROM PACKAGE icalendar FILE 'build.transit';
+IMPORT webdav FROM PACKAGE webdav FILE 'build.transit';
+IMPORT websub FROM PACKAGE websub FILE 'build.transit';
+IMPORT json_rpc FROM PACKAGE json_rpc FILE 'build.transit';
+IMPORT tus FROM PACKAGE tus FILE 'build.transit';
+IMPORT standard_webhooks FROM PACKAGE standard_webhooks FILE 'build.transit';
+IMPORT cloudevents FROM PACKAGE cloudevents FILE 'build.transit';
 
 EXPORT TARGET default AS GROUP (
   oauth.default,
@@ -27,7 +51,19 @@ EXPORT TARGET default AS GROUP (
   oidc.default,
   saml.default,
   scim.default,
-  webauthn.default
+  webauthn.default,
+  activitypub.default,
+  jmap.default,
+  carddav.default,
+  caldav.default,
+  vcard.default,
+  icalendar.default,
+  webdav.default,
+  websub.default,
+  json_rpc.default,
+  tus.default,
+  standard_webhooks.default,
+  cloudevents.default
 );
 EXPORT TEST TARGET tests AS GROUP (
   oauth.tests,
@@ -37,5 +73,17 @@ EXPORT TEST TARGET tests AS GROUP (
   oidc.tests,
   saml.tests,
   scim.tests,
-  webauthn.tests
+  webauthn.tests,
+  activitypub.tests,
+  jmap.tests,
+  carddav.tests,
+  caldav.tests,
+  vcard.tests,
+  icalendar.tests,
+  webdav.tests,
+  websub.tests,
+  json_rpc.tests,
+  tus.tests,
+  standard_webhooks.tests,
+  cloudevents.tests
 );

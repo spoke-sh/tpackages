@@ -93,7 +93,11 @@ with a different definition rejects and requires explicit migration handling.
 Queue dataflows own their input operation and durable continuation. `EXECUTE SINK`
 is legal only in dataflows; it uses an explicit original effect ID and
 `ON REPLAY OBSERVE ONLY`. Outcomes distinguish `known`, `refused`, and `unknown`.
-Unknown effects are retained, never retried by creating a new ID. `ON FAILURE`
+Unknown effects are retained. OAuth and other non-replayable operations must not
+retry by creating a new ID. Explicit protocol redelivery may create a separate
+authorized attempt while preserving the logical message and all prior evidence;
+see the [application protocol contracts](application-protocol-contracts.md).
+`ON FAILURE`
 executes with the original input and cannot overwrite a terminal success. Queues
 store protected handles rather than secret bytes. A protected handle is bound to
 instance, owner, purpose, expiry, and originating operation; guessing its value

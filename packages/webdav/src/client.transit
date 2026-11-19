@@ -1,0 +1,30 @@
+CREATE PUBLIC MODULE Client(binding SCHEMA_BINDING, origin TEXT, authorization HTTP_AUTH_CAPABILITY) AS BEGIN
+  BIND SCHEMA dav TO $binding;
+  REQUIRE HTTPS_ORIGIN($origin) ELSE 'InvalidOrigin';
+  CREATE PRIVATE DOCUMENT dav.policy (id TEXT PRIMARY KEY, enabled BOOLEAN) WITH (profile = 'versioned');
+  INSERT INTO dav.policy VALUES ('account', TRUE) ON CONFLICT DO NOTHING;
+  CREATE PRIVATE STREAM dav.results (event_id TEXT, owner OWNER, method TEXT, outcome TEXT, status OPTION<BIGINT>)
+    WITH (retention = 'unlimited', partition_by = 'owner', disclosure = 'current_owner');
+  CREATE SINK dav.http INTO HTTP WITH (dynamic_endpoint = TRUE, allowed_hosts = SET(URL_HOST($origin)), authorization = $authorization,
+    request_encoding = 'bytes', response = 'protected_bytes', response_max_bytes = 1048576, follow_redirects = FALSE,
+    request_timeout = '30s', max_attempts = 1, unknown_outcome = 'retain', capture = 'redacted_metadata');
+  CREATE DATAFLOW dav.request FROM COMMAND (method TEXT, url TEXT, headers HTTP_FIELDS, body SECRET<BYTES>) AS request
+    WITH (continuation = 'durable', idempotency = 'original_owner_request') AS BEGIN
+    REQUIRE request.method IN ('OPTIONS', 'PROPFIND', 'REPORT', 'GET', 'PUT', 'DELETE') ELSE 'UnsupportedMethod';
+    REQUIRE HTTPS_URL(request.url, SET(URL_HOST($origin))) AND URL_ORIGIN(request.url) = $origin ELSE 'DestinationDenied';
+    REQUIRE NOT ANY(HTTP_FIELD_NAMES(request.headers), name => LOWER(name) IN ('authorization', 'host', 'cookie')) ELSE 'ProtectedHeader';
+    IF request.method IN ('PUT', 'DELETE') THEN
+      REQUIRE HTTP_FIELD_COUNT(request.headers, 'If-Match') + HTTP_FIELD_COUNT(request.headers, 'If-None-Match') = 1 ELSE 'PreconditionRequired';
+      REQUIRE request.method <> 'DELETE' OR HTTP_FIELD_COUNT(request.headers, 'If-Match') = 1 ELSE 'PreconditionRequired';
+    END IF;
+    REQUIRE (SELECT ONE enabled FROM dav.policy WHERE id = 'account').enabled ELSE 'AccountDisabled';
+    LET receipt = EXECUTE SINK dav.http EFFECT CURRENT_REQUEST_ID() METHOD request.method ENDPOINT request.url
+      GUARD (SELECT ONE enabled FROM dav.policy WHERE id = 'account').enabled HEADERS request.headers BODY request.body ON REPLAY OBSERVE ONLY;
+    BEGIN ATOMIC
+      PRODUCE INTO dav.results VALUES (CURRENT_REQUEST_ID(), CURRENT_OWNER(), request.method, receipt.outcome, receipt.status);
+    END;
+    RETURN receipt;
+  END;
+  EXPORT DATAFLOW dav.request AS request;
+  EXPORT STREAM dav.results AS results;
+END;

@@ -1,0 +1,27 @@
+DEPENDENCY library FROM WORKSPACE 'tus';
+IMPORT library FROM PACKAGE library FILE 'build.transit';
+
+EXPORT MODULE Application() AS BEGIN
+  LET api = USE library.Server(SCHEMA_BINDING('example_tus'), BLOB_STORE_SETTING('example.uploads'), 10485760, 3600);
+  AUTHORIZE MODULE api WITH (commands = ROLE SETTING('example.command_role'), state = ROLE SETTING('example.state_role'), effects = ROLE SETTING('example.effect_role'), reads = ROLE SETTING('example.read_role'), maintenance = ROLE SETTING('example.maintenance_role'));
+  ACTIVATE MODULE api;
+  EXPORT MODULE api AS api;
+  BIND SCHEMA consumer TO SCHEMA_BINDING('example_tus_consumer');
+  CREATE PRIVATE TABLE consumer.seen (id TEXT PRIMARY KEY, owner OWNER);
+  CREATE DATAFLOW consumer.observe FROM STREAM api.results AS event
+    WITH (consumer = 'example.results', required = TRUE, checkpoint = 'terminal_atomic') AS BEGIN ATOMIC
+    INSERT INTO consumer.seen VALUES (event.event_id, event.owner) ON CONFLICT DO ASSERT SAME ROW;
+  END;
+  AUTHORIZE DATAFLOW consumer.observe AS ROLE SETTING('example.consumer_role');
+  ACTIVATE DATAFLOW consumer.observe;
+END;
+LET application = USE Application();
+EXPORT TARGET default AS SQL OF application;
+
+CREATE PUBLIC TEST TARGET tests AS BEGIN
+  TEST 'only the selected public package closure is emitted' AS BEGIN
+    ASSERT DEPENDENCIES default EQUAL SET('tus');
+    ASSERT NO OUTPUT FROM PACKAGES EXCEPT SET('tus');
+    ASSERT NO RESOURCES OF KINDS (SOURCE, PUBLICATION) IN default;
+  END;
+END;

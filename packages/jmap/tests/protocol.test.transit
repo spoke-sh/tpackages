@@ -1,0 +1,13 @@
+IMPORT library FROM '../build.transit';
+TEST 'unapproved session destinations refuse before credentials can be sent' USING MODULES (application) AS BEGIN
+  LET denied = USE library.Core(SCHEMA_BINDING('denied'), 'https://attacker.example.test/session', SET('mail.example.test'), HTTP_AUTH_SETTING('example.jmap'));
+  ACTIVATE TEST MODULE denied;
+  ASSERT CALL denied.connect() FAILS WITH 'DestinationDenied';
+  ASSERT EFFECT_COUNT(denied) = 0;
+END;
+TEST 'session discovery commits only validated capabilities' USING MODULES (application) AS BEGIN
+  ACTIVATE TEST MODULE application.api;
+  MOCK SINK application.api.http RETURNS STATUS 200 BODY TEST SECRET JSON '{"capabilities":{},"accounts":{}}';
+  ASSERT CALL application.api.connect() FAILS WITH 'InvalidSession';
+  ASSERT STREAM_COUNT(application.api.results) = 0;
+END;

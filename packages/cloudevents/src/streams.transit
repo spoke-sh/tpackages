@@ -1,0 +1,26 @@
+IMPORT types FROM './codec.transit';
+CREATE PUBLIC MODULE Streams(binding SCHEMA_BINDING, source TEXT, owner OWNER) AS BEGIN
+  BIND SCHEMA events TO $binding;
+  LET codec = USE types.Codec();
+  CREATE PRIVATE KV events.claims (ROW(commitment BYTES));
+  CREATE PRIVATE STREAM events.accepted (event_id TEXT, owner OWNER, event types.Event)
+    WITH (retention = 'unlimited', partition_by = 'owner', disclosure = 'current_owner');
+  CREATE DATAFLOW events.accept FROM COMMAND (event types.Event) AS request
+    WITH (idempotency = 'original_owner_request') AS BEGIN ATOMIC
+    REQUIRE CURRENT_OWNER() = $owner ELSE 'Forbidden';
+    LET valid = codec.validate(request.event);
+    REQUIRE JSON_AS_STRING(MAP_GET(valid.attributes, 'source')) = $source ELSE 'SourceNotAuthorized';
+    LET id = JSON_AS_STRING(MAP_GET(valid.attributes, 'id'));
+    LET commitment = SHA256(codec.encode(valid));
+    LET previous = GET FROM events.claims KEY id;
+    IF IS_PRESENT(previous) THEN
+      REQUIRE REQUIRE_SOME(previous).value.commitment = commitment ELSE 'ConflictingEvent';
+      RETURN id;
+    END IF;
+    PUT INTO events.claims KEY id VALUE ROW(commitment => commitment) IF ABSENT;
+    PRODUCE INTO events.accepted VALUES (id, CURRENT_OWNER(), valid);
+    RETURN id;
+  END;
+  EXPORT DATAFLOW events.accept AS accept;
+  EXPORT STREAM events.accepted AS accepted;
+END;

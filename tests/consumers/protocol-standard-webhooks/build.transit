@@ -1,0 +1,29 @@
+DEPENDENCY library FROM WORKSPACE 'standard-webhooks';
+IMPORT library FROM PACKAGE library FILE 'build.transit';
+
+EXPORT MODULE Application() AS BEGIN
+  LET signatures = USE library.Signatures();
+  LET receiver = USE library.Receiver(SCHEMA_BINDING('example_webhooks_receiver'), 'endpoint_example', [ROW(scheme => 'v1', reference => 'example.webhook.key')]);
+  AUTHORIZE MODULE receiver WITH (commands = ROLE SETTING('example.command_role'), state = ROLE SETTING('example.state_role'), effects = ROLE SETTING('example.effect_role'), reads = ROLE SETTING('example.read_role'), maintenance = ROLE SETTING('example.maintenance_role'));
+  ACTIVATE MODULE receiver;
+  EXPORT MODULE receiver AS receiver;
+  EXPORT MODULE signatures AS signatures;
+  BIND SCHEMA consumer TO SCHEMA_BINDING('example_standard_webhooks_consumer');
+  CREATE PRIVATE TABLE consumer.seen (id TEXT PRIMARY KEY, owner OWNER);
+  CREATE DATAFLOW consumer.observe FROM STREAM receiver.accepted AS event
+    WITH (consumer = 'example.results', required = TRUE, checkpoint = 'terminal_atomic') AS BEGIN ATOMIC
+    INSERT INTO consumer.seen VALUES (event.event_id, event.owner) ON CONFLICT DO ASSERT SAME ROW;
+  END;
+  AUTHORIZE DATAFLOW consumer.observe AS ROLE SETTING('example.consumer_role');
+  ACTIVATE DATAFLOW consumer.observe;
+END;
+LET application = USE Application();
+EXPORT TARGET default AS SQL OF application;
+
+CREATE PUBLIC TEST TARGET tests AS BEGIN
+  TEST 'only the selected public package closure is emitted' AS BEGIN
+    ASSERT DEPENDENCIES default EQUAL SET('standard-webhooks');
+    ASSERT NO OUTPUT FROM PACKAGES EXCEPT SET('standard-webhooks');
+    ASSERT NO RESOURCES OF KINDS (SOURCE, PUBLICATION) IN default;
+  END;
+END;

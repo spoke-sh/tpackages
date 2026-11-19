@@ -1,0 +1,18 @@
+DEPENDENCY jmap FROM WORKSPACE 'jmap';
+IMPORT jmap FROM PACKAGE jmap FILE 'build.transit';
+CREATE MODULE Application() AS BEGIN
+  LET core = USE jmap.Core(SCHEMA_BINDING('mail_core'), 'https://mail.example.test/session', SET('mail.example.test'), HTTP_AUTH_SETTING('mail'));
+  LET mail = USE jmap.Mail(SCHEMA_BINDING('mail_methods'), core, 'account-1');
+  LET sync = USE jmap.Sync(SCHEMA_BINDING('mail_sync'), mail, 'Email');
+  EXPORT MODULE core AS core;
+  EXPORT MODULE mail AS mail;
+  EXPORT MODULE sync AS sync;
+END;
+LET application = USE Application();
+EXPORT TARGET default AS SQL OF application;
+CREATE PUBLIC TEST TARGET tests AS BEGIN
+  TEST 'mail synchronization selects no push connection or blob transport' AS BEGIN
+    ASSERT DEPENDENCIES default EQUAL SET('jmap');
+    ASSERT NO OUTPUT FROM MODULES (jmap.Push, jmap.Blobs);
+  END;
+END;

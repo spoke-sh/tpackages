@@ -1,0 +1,6 @@
+EXPORT MODULE Codec FROM './src/codec.transit';
+EXPORT MODULE Client FROM './src/client.transit';
+EXPORT MODULE Sync FROM './src/sync.transit';
+EXPORT TARGET default FROM './examples/build.transit';
+EXPORT TEST TARGET tests FROM './tests/build.transit';
+EXPORT INTERFACE Requests FROM './src/sync.transit';

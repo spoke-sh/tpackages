@@ -1,6 +1,6 @@
 # Compiler and runtime requirements
 
-All eight protocol packages contain target-language implementations, examples,
+All twenty protocol and support packages contain target-language implementations, examples,
 and Transit tests. **None is executable or qualified on the current pins.**
 The compiler rejects their entries before checking implementation bodies. Source
 review and the checks below do not establish protocol correctness or conformance.
@@ -42,6 +42,21 @@ failure code; matching a gap never turns a protocol test into a passing test.
 | TP-15 | transitc + lifecycle: bounded native timers, explicit grants/activation, retained unresolved work, and protected-value destruction. | [Maintenance probe](../tests/compiler/maintenance/build.transit), [OAuth cleanup](../packages/oauth/src/maintenance.transit). | FROM TIMER refuses with InvalidSourceTemplate at 3:39. Cleanup and replacement behavior is not reached. |
 | TP-16 | transitc + command/HTTP owners: typed command admission, original-request results, strict decoding, native response ownership, and current disclosure authority. | [Command/HTTP probe](../tests/compiler/command-http/build.transit), [OAuth binding tests](../packages/oauth/tests/http.test.transit). | FROM COMMAND refuses with InvalidSourceTemplate at 2:38. The later HTTP Source, response and decoder operations are not reached. |
 
+The application-protocol expansion adds three focused requirements. Each probe
+currently refuses the declaration at `root/build.transit:2:17` with
+`RuntimePrivateOrUnsupportedDeclaration`; none reaches the later operations.
+
+| ID | Target contract | Probe and authored consumer | Evidence |
+| --- | --- | --- | --- |
+| TP-17 | Native blob capabilities: durable offsets, bounded streaming append, lifecycle fencing, partial-write receipts, atomic retirement, and bounded HTTP/blob transfer. | [Blob probe](../tests/compiler/blob-streaming/build.transit), [tus server](../packages/tus/src/server.transit), [JMAP blobs](../packages/jmap/src/blobs.transit). | Declaration lowering refuses; offset, concurrency, and recovery tests not run. |
+| TP-18 | Typed command-port maps, JSON argument/result adapters, independent child transactions, deadlines, and generic public error categories. | [Dispatch probe](../tests/compiler/command-dispatch/build.transit), [JSON-RPC dispatch](../packages/json-rpc/src/server.transit). | Declaration lowering refuses; dispatch and batching not reached. |
+| TP-19 | Native SSE connection lifecycle, bounded buffering, reconnect/cancellation, and durable coalesced reconciliation. | [SSE probe](../tests/compiler/sse/build.transit), [JMAP Push](../packages/jmap/src/push.transit). | Declaration lowering refuses; connection behavior not reached. |
+
+The [application protocol contracts](application-protocol-contracts.md) also
+extend TP-05/06/07/08/12/15/16 with precise protected-value, retry, codec, HTTP,
+maintenance, and test-host requirements. Their bodies remain behind the existing
+entry refusals; no additional diagnostic is inferred from source design alone.
+
 Detailed syntax and primitive contracts are in
 [target-language.md](target-language.md). These are local upstream requirements;
 no upstream issue or implementation is implied. Each compiler change should use
@@ -56,7 +71,7 @@ construct is unsupported or that any protocol body has been checked.
 | Surface | Resolution / parsing | SQL emission / installation | Tests |
 | --- | --- | --- | --- |
 | Bootstrap Table composition | Passed on the host when `just check` succeeds | Check-mode native preparation; separate `just build bootstrap` emits SQL | Two native tests pass when the check succeeds |
-| Workspace and eight protocol packages | Blocked at recorded first diagnostic | Not run | Not run |
+| Workspace and twenty package roots | Blocked at recorded first diagnostic | Not run | Not run |
 | Independently rooted consumers | Blocked before closure assertions | Not run | Not run |
 | External snapshot | Git source fetched; package parse blocked | Not run | Not run |
 

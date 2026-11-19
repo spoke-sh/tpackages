@@ -915,6 +915,918 @@
         "line": "1",
         "byte_column": "23"
       }
+    },
+    {
+      "id": "packages-cloudevents-build",
+      "entry": "packages/cloudevents/build.transit",
+      "action": "build",
+      "requirement": "TP-02",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "21"
+      }
+    },
+    {
+      "id": "packages-cloudevents-test",
+      "entry": "packages/cloudevents/build.transit",
+      "action": "test",
+      "requirement": "TP-02",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "21"
+      }
+    },
+    {
+      "id": "packages-standard-webhooks-build",
+      "entry": "packages/standard-webhooks/build.transit",
+      "action": "build",
+      "requirement": "TP-02",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "26"
+      }
+    },
+    {
+      "id": "packages-standard-webhooks-test",
+      "entry": "packages/standard-webhooks/build.transit",
+      "action": "test",
+      "requirement": "TP-02",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "26"
+      }
+    },
+    {
+      "id": "packages-tus-build",
+      "entry": "packages/tus/build.transit",
+      "action": "build",
+      "requirement": "TP-02",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "22"
+      }
+    },
+    {
+      "id": "packages-tus-test",
+      "entry": "packages/tus/build.transit",
+      "action": "test",
+      "requirement": "TP-02",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "22"
+      }
+    },
+    {
+      "id": "packages-json-rpc-build",
+      "entry": "packages/json-rpc/build.transit",
+      "action": "build",
+      "requirement": "TP-02",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "21"
+      }
+    },
+    {
+      "id": "packages-json-rpc-test",
+      "entry": "packages/json-rpc/build.transit",
+      "action": "test",
+      "requirement": "TP-02",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "21"
+      }
+    },
+    {
+      "id": "packages-websub-build",
+      "entry": "packages/websub/build.transit",
+      "action": "build",
+      "requirement": "TP-02",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "25"
+      }
+    },
+    {
+      "id": "packages-websub-test",
+      "entry": "packages/websub/build.transit",
+      "action": "test",
+      "requirement": "TP-02",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "25"
+      }
+    },
+    {
+      "id": "packages-webdav-build",
+      "entry": "packages/webdav/build.transit",
+      "action": "build",
+      "requirement": "TP-02",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "21"
+      }
+    },
+    {
+      "id": "packages-webdav-test",
+      "entry": "packages/webdav/build.transit",
+      "action": "test",
+      "requirement": "TP-02",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "21"
+      }
+    },
+    {
+      "id": "packages-icalendar-build",
+      "entry": "packages/icalendar/build.transit",
+      "action": "build",
+      "requirement": "TP-02",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "21"
+      }
+    },
+    {
+      "id": "packages-icalendar-test",
+      "entry": "packages/icalendar/build.transit",
+      "action": "test",
+      "requirement": "TP-02",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "21"
+      }
+    },
+    {
+      "id": "packages-vcard-build",
+      "entry": "packages/vcard/build.transit",
+      "action": "build",
+      "requirement": "TP-02",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "21"
+      }
+    },
+    {
+      "id": "packages-vcard-test",
+      "entry": "packages/vcard/build.transit",
+      "action": "test",
+      "requirement": "TP-02",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "21"
+      }
+    },
+    {
+      "id": "packages-caldav-build",
+      "entry": "packages/caldav/build.transit",
+      "action": "build",
+      "requirement": "TP-01",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "24"
+      }
+    },
+    {
+      "id": "packages-caldav-test",
+      "entry": "packages/caldav/build.transit",
+      "action": "test",
+      "requirement": "TP-01",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "24"
+      }
+    },
+    {
+      "id": "packages-carddav-build",
+      "entry": "packages/carddav/build.transit",
+      "action": "build",
+      "requirement": "TP-01",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "24"
+      }
+    },
+    {
+      "id": "packages-carddav-test",
+      "entry": "packages/carddav/build.transit",
+      "action": "test",
+      "requirement": "TP-01",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "24"
+      }
+    },
+    {
+      "id": "packages-jmap-build",
+      "entry": "packages/jmap/build.transit",
+      "action": "build",
+      "requirement": "TP-02",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "20"
+      }
+    },
+    {
+      "id": "packages-jmap-test",
+      "entry": "packages/jmap/build.transit",
+      "action": "test",
+      "requirement": "TP-02",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "20"
+      }
+    },
+    {
+      "id": "packages-activitypub-build",
+      "entry": "packages/activitypub/build.transit",
+      "action": "build",
+      "requirement": "TP-02",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "21"
+      }
+    },
+    {
+      "id": "packages-activitypub-test",
+      "entry": "packages/activitypub/build.transit",
+      "action": "test",
+      "requirement": "TP-02",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "21"
+      }
+    },
+    {
+      "id": "tests-consumers-dav-composition-build",
+      "entry": "tests/consumers/dav-composition/build.transit",
+      "action": "build",
+      "requirement": "TP-01",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "24"
+      }
+    },
+    {
+      "id": "tests-consumers-dav-composition-test",
+      "entry": "tests/consumers/dav-composition/build.transit",
+      "action": "test",
+      "requirement": "TP-01",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "24"
+      }
+    },
+    {
+      "id": "tests-consumers-events-webhooks-build",
+      "entry": "tests/consumers/events-webhooks/build.transit",
+      "action": "build",
+      "requirement": "TP-01",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "24"
+      }
+    },
+    {
+      "id": "tests-consumers-events-webhooks-test",
+      "entry": "tests/consumers/events-webhooks/build.transit",
+      "action": "test",
+      "requirement": "TP-01",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "24"
+      }
+    },
+    {
+      "id": "tests-consumers-jmap-mail-build",
+      "entry": "tests/consumers/jmap-mail/build.transit",
+      "action": "build",
+      "requirement": "TP-01",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "22"
+      }
+    },
+    {
+      "id": "tests-consumers-jmap-mail-test",
+      "entry": "tests/consumers/jmap-mail/build.transit",
+      "action": "test",
+      "requirement": "TP-01",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "22"
+      }
+    },
+    {
+      "id": "tests-consumers-protocol-activitypub-build",
+      "entry": "tests/consumers/protocol-activitypub/build.transit",
+      "action": "build",
+      "requirement": "TP-01",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "25"
+      }
+    },
+    {
+      "id": "tests-consumers-protocol-activitypub-test",
+      "entry": "tests/consumers/protocol-activitypub/build.transit",
+      "action": "test",
+      "requirement": "TP-01",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "25"
+      }
+    },
+    {
+      "id": "tests-consumers-protocol-caldav-build",
+      "entry": "tests/consumers/protocol-caldav/build.transit",
+      "action": "build",
+      "requirement": "TP-01",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "25"
+      }
+    },
+    {
+      "id": "tests-consumers-protocol-caldav-test",
+      "entry": "tests/consumers/protocol-caldav/build.transit",
+      "action": "test",
+      "requirement": "TP-01",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "25"
+      }
+    },
+    {
+      "id": "tests-consumers-protocol-carddav-build",
+      "entry": "tests/consumers/protocol-carddav/build.transit",
+      "action": "build",
+      "requirement": "TP-01",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "25"
+      }
+    },
+    {
+      "id": "tests-consumers-protocol-carddav-test",
+      "entry": "tests/consumers/protocol-carddav/build.transit",
+      "action": "test",
+      "requirement": "TP-01",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "25"
+      }
+    },
+    {
+      "id": "tests-consumers-protocol-cloudevents-build",
+      "entry": "tests/consumers/protocol-cloudevents/build.transit",
+      "action": "build",
+      "requirement": "TP-01",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "25"
+      }
+    },
+    {
+      "id": "tests-consumers-protocol-cloudevents-test",
+      "entry": "tests/consumers/protocol-cloudevents/build.transit",
+      "action": "test",
+      "requirement": "TP-01",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "25"
+      }
+    },
+    {
+      "id": "tests-consumers-protocol-icalendar-build",
+      "entry": "tests/consumers/protocol-icalendar/build.transit",
+      "action": "build",
+      "requirement": "TP-01",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "25"
+      }
+    },
+    {
+      "id": "tests-consumers-protocol-icalendar-test",
+      "entry": "tests/consumers/protocol-icalendar/build.transit",
+      "action": "test",
+      "requirement": "TP-01",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "25"
+      }
+    },
+    {
+      "id": "tests-consumers-protocol-jmap-build",
+      "entry": "tests/consumers/protocol-jmap/build.transit",
+      "action": "build",
+      "requirement": "TP-01",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "25"
+      }
+    },
+    {
+      "id": "tests-consumers-protocol-jmap-test",
+      "entry": "tests/consumers/protocol-jmap/build.transit",
+      "action": "test",
+      "requirement": "TP-01",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "25"
+      }
+    },
+    {
+      "id": "tests-consumers-protocol-json-rpc-build",
+      "entry": "tests/consumers/protocol-json-rpc/build.transit",
+      "action": "build",
+      "requirement": "TP-01",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "25"
+      }
+    },
+    {
+      "id": "tests-consumers-protocol-json-rpc-test",
+      "entry": "tests/consumers/protocol-json-rpc/build.transit",
+      "action": "test",
+      "requirement": "TP-01",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "25"
+      }
+    },
+    {
+      "id": "tests-consumers-protocol-standard-webhooks-build",
+      "entry": "tests/consumers/protocol-standard-webhooks/build.transit",
+      "action": "build",
+      "requirement": "TP-01",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "25"
+      }
+    },
+    {
+      "id": "tests-consumers-protocol-standard-webhooks-test",
+      "entry": "tests/consumers/protocol-standard-webhooks/build.transit",
+      "action": "test",
+      "requirement": "TP-01",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "25"
+      }
+    },
+    {
+      "id": "tests-consumers-protocol-tus-build",
+      "entry": "tests/consumers/protocol-tus/build.transit",
+      "action": "build",
+      "requirement": "TP-01",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "25"
+      }
+    },
+    {
+      "id": "tests-consumers-protocol-tus-test",
+      "entry": "tests/consumers/protocol-tus/build.transit",
+      "action": "test",
+      "requirement": "TP-01",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "25"
+      }
+    },
+    {
+      "id": "tests-consumers-protocol-vcard-build",
+      "entry": "tests/consumers/protocol-vcard/build.transit",
+      "action": "build",
+      "requirement": "TP-01",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "25"
+      }
+    },
+    {
+      "id": "tests-consumers-protocol-vcard-test",
+      "entry": "tests/consumers/protocol-vcard/build.transit",
+      "action": "test",
+      "requirement": "TP-01",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "25"
+      }
+    },
+    {
+      "id": "tests-consumers-protocol-webdav-build",
+      "entry": "tests/consumers/protocol-webdav/build.transit",
+      "action": "build",
+      "requirement": "TP-01",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "25"
+      }
+    },
+    {
+      "id": "tests-consumers-protocol-webdav-test",
+      "entry": "tests/consumers/protocol-webdav/build.transit",
+      "action": "test",
+      "requirement": "TP-01",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "25"
+      }
+    },
+    {
+      "id": "tests-consumers-protocol-websub-build",
+      "entry": "tests/consumers/protocol-websub/build.transit",
+      "action": "build",
+      "requirement": "TP-01",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "25"
+      }
+    },
+    {
+      "id": "tests-consumers-protocol-websub-test",
+      "entry": "tests/consumers/protocol-websub/build.transit",
+      "action": "test",
+      "requirement": "TP-01",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.syntax",
+        "category": "syntax",
+        "stage": "parse",
+        "native_cause": "InvalidSourceSyntax",
+        "source": "root/build.transit",
+        "line": "1",
+        "byte_column": "25"
+      }
+    },
+    {
+      "id": "tests-compiler-blob-streaming-build",
+      "entry": "tests/compiler/blob-streaming/build.transit",
+      "action": "build",
+      "requirement": "TP-17",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.unsupported",
+        "category": "unsupported",
+        "stage": "compile",
+        "native_cause": "RuntimePrivateOrUnsupportedDeclaration",
+        "source": "root/build.transit",
+        "line": "2",
+        "byte_column": "17"
+      }
+    },
+    {
+      "id": "tests-compiler-command-dispatch-build",
+      "entry": "tests/compiler/command-dispatch/build.transit",
+      "action": "build",
+      "requirement": "TP-18",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.unsupported",
+        "category": "unsupported",
+        "stage": "compile",
+        "native_cause": "RuntimePrivateOrUnsupportedDeclaration",
+        "source": "root/build.transit",
+        "line": "2",
+        "byte_column": "17"
+      }
+    },
+    {
+      "id": "tests-compiler-sse-build",
+      "entry": "tests/compiler/sse/build.transit",
+      "action": "build",
+      "requirement": "TP-19",
+      "expected": {
+        "definition": "06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5",
+        "code": "application.source.unsupported",
+        "category": "unsupported",
+        "stage": "compile",
+        "native_cause": "RuntimePrivateOrUnsupportedDeclaration",
+        "source": "root/build.transit",
+        "line": "2",
+        "byte_column": "17"
+      }
     }
   ]
 }

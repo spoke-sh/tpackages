@@ -1,0 +1,18 @@
+CREATE PUBLIC MODULE Discovery() AS BEGIN
+  CREATE PUBLIC FUNCTION links(headers HTTP_FIELDS, body BYTES, content_type TEXT, base TEXT) RETURNS ROW(topic TEXT, hubs LIST<TEXT>) AS BEGIN
+    VAR links = HTTP_LINKS($headers, max_links => 64);
+    IF NOT ANY(links, link => CONTAINS(link.rels, 'hub')) THEN
+      IF XML_MEDIA_TYPE($content_type) THEN
+        LET document = XML_PARSE($body, max_bytes => 1048576, max_depth => 32, max_nodes => 10000, dtd => FALSE, external_entities => FALSE);
+        SET links = MAP_LIST(XML_DESCENDANTS(document, '{http://www.w3.org/2005/Atom}link'), node => ROW(href => XML_ATTRIBUTE(node, 'href'), rels => SET(XML_ATTRIBUTE(node, 'rel'))));
+      ELSEIF MEDIA_TYPE($content_type) = 'text/html' THEN
+        SET links = HTML_HEAD_LINKS($body, max_bytes => 1048576, max_nodes => 10000);
+      END IF;
+    END IF;
+    LET topics = FILTER(links, link => CONTAINS(link.rels, 'self'));
+    REQUIRE LENGTH(topics) = 1 ELSE 'AmbiguousTopic';
+    LET hubs = UNIQUE(MAP_LIST(FILTER(links, link => CONTAINS(link.rels, 'hub')), link => URL_RESOLVE($base, link.href)));
+    REQUIRE LENGTH(hubs) BETWEEN 1 AND 16 ELSE 'HubUnavailable';
+    RETURN ROW(topic => URL_RESOLVE($base, topics[0].href), hubs => hubs);
+  END;
+END;

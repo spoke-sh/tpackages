@@ -1,0 +1,15 @@
+IMPORT library FROM '../build.transit';
+IMPORT source FROM '../src/codec.transit';
+LET codec = USE source.Codec();
+TEST 'structured envelopes preserve null and binary data without conflation' USING MODULES (application) AS BEGIN
+  LET event = codec.decode(UTF8_ENCODE('{"specversion":"1.0","id":"1","source":"/orders","type":"order.created","data":null}'));
+  ASSERT IS_PRESENT(event.data) AND REQUIRE_SOME(event.data) = JSON 'null';
+  ASSERT codec.decode(codec.encode(event)) = event;
+  LET binary = codec.decode(UTF8_ENCODE('{"specversion":"1.0","id":"2","source":"/orders","type":"file","data_base64":"AAE="}'));
+  ASSERT REQUIRE_SOME(binary.binary) = BYTES_HEX('0001');
+END;
+TEST 'malformed envelopes and conflicting data refuse' USING MODULES (application) AS BEGIN
+  ASSERT codec.decode(UTF8_ENCODE('{"specversion":"2.0","id":"1","source":"/","type":"x"}')) FAILS WITH 'UnsupportedVersion';
+  ASSERT codec.decode(UTF8_ENCODE('{"specversion":"1.0","id":"1","source":"/","type":"x","data":null,"data_base64":"AA=="}')) FAILS WITH 'AmbiguousData';
+  ASSERT codec.decode(UTF8_ENCODE('{"specversion":"1.0","id":"1","source":"/","type":"x","bad_key":1}')) FAILS WITH 'InvalidAttribute';
+END;
