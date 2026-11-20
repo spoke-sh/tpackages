@@ -2,8 +2,8 @@
   description = "Official reusable Transit application packages";
 
   inputs = {
-    transit-upstream.url = "github:spoke-sh/transit/c1f2680d9353175e58ad503e750e7b4da76a84c5";
-    transitc-upstream.url = "github:spoke-sh/transitc/61536eaa510e2ba8826c08b4f41072ed66f41ed5";
+    transit-upstream.url = "github:spoke-sh/transit/f31673bbd0fa599c9d2bd98c2ceb47d328c19ae6";
+    transitc-upstream.url = "github:spoke-sh/transitc/0dd62605005bec8c0fbb4c1b691bc635c3512244";
     nixpkgs.follows = "transit-upstream/nixpkgs";
   };
 
@@ -83,8 +83,8 @@
                 chmod -R u+w .
                 transitc --help
                 transitc --version
-                transit build
-                transit test
+                transitc build
+                transitc test
                 touch "$out"
               '';
         }

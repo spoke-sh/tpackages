@@ -7,10 +7,15 @@ review and the checks below do not establish protocol correctness or conformance
 
 Baseline:
 
-- Transit: `c1f2680d9353175e58ad503e750e7b4da76a84c5`.
-- transitc: `61536eaa510e2ba8826c08b4f41072ed66f41ed5`.
-- Compiler diagnostic definition: `06091bff7096eeaceb3fc0d62bc0aa0d1bc184b20c3b275df74e8c93bf8b13e5`.
-- Standalone transitc: help/version only. Attempts below use `transit build/test`.
+- Transit: `f31673bbd0fa599c9d2bd98c2ceb47d328c19ae6`.
+- transitc: `0dd62605005bec8c0fbb4c1b691bc635c3512244`.
+- Compiler diagnostic definition: `f311e893f8d2f4c21f426790172fadfebe7eb2364615eb1566c09f11d39bb0bb`.
+- Attempts below use `transitc build/test`; isolated tests use the compatible
+  Transit runtime supplied by the compiler package.
+
+Re-audited on 2026-11-20: all 114 recorded attempts retain the same diagnostic
+codes, stages, native causes, and source locations. Only the diagnostic definition
+changed. The bootstrap build and its two native tests pass through `transitc`.
 
 The exact checked commands and first-diagnostic fingerprints are in
 [support.json](../tooling/support.json). `just check` compares the definition, code,

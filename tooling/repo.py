@@ -36,7 +36,7 @@ PACKAGES = {
 
 
 def command(action, entry):
-    result = ["transit", action, "-f", str(entry), "--format", "json", "--color", "off"]
+    result = ["transitc", action, "-f", str(entry), "--format", "json", "--color", "off"]
     if action == "build":
         result.append("--check")
     else:
@@ -139,7 +139,7 @@ def run_case(case, reports):
     if case["entry"] == "@external":
         with tempfile.TemporaryDirectory(prefix="tpackages-consumer-") as temporary:
             consumer = snapshot_fixture(Path(temporary))
-            invocation = ["transit", "build", "-f", "build.transit", "--format", "json", "--color", "off", "--fetch"]
+            invocation = ["transitc", "build", "-f", "build.transit", "--format", "json", "--color", "off", "--fetch"]
             result = subprocess.run(invocation, cwd=consumer, capture_output=True, text=True, timeout=60)
             # The snapshot/consumer are temporary. Redact their nondeterministic
             # paths in stored transcripts, never in the matching fields.
@@ -190,8 +190,8 @@ def check():
     subprocess.run([sys.executable, "-m", "unittest", "discover", "-s", "tooling/tests", "-q"], cwd=ROOT, check=True)
     subprocess.run(["transitc", "--help"], check=True, capture_output=True)
     subprocess.run(["transitc", "--version"], check=True, capture_output=True)
-    subprocess.run(["transit", "build", "-f", "tests/bootstrap/build.transit", "--check"], cwd=ROOT, check=True)
-    subprocess.run(["transit", "test", "-f", "tests/bootstrap/build.transit"], cwd=ROOT, check=True)
+    subprocess.run(["transitc", "build", "-f", "tests/bootstrap/build.transit", "--check"], cwd=ROOT, check=True)
+    subprocess.run(["transitc", "test", "-f", "tests/bootstrap/build.transit"], cwd=ROOT, check=True)
     reports = ROOT / ".transit/reports"
     reports.mkdir(parents=True, exist_ok=True)
     results = [run_case(case, reports) for case in ledger["cases"]]
@@ -211,7 +211,7 @@ def main():
             return 0
         entry = {"all": "build.transit", "bootstrap": "tests/bootstrap/build.transit"}.get(
             args.package, f"packages/{args.package}/build.transit")
-        invocation = ["transit", args.action, "-f", entry]
+        invocation = ["transitc", args.action, "-f", entry]
         if args.action == "test":
             invocation.extend(["--target", "tests"])
         return subprocess.run(invocation, cwd=ROOT).returncode

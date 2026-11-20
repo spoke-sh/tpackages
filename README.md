@@ -127,10 +127,10 @@ repository's history. `nix flake check --print-build-logs` runs formatting and t
 isolated bootstrap build/tests in a Nix sandbox. Nix may fetch or build upstream
 artifacts on first use.
 
-The pinned standalone `transitc` currently implements only `--help` and `--version`.
-Compilation and tests use `transit build` and `transit test` until the compiler
-extraction supplies those capabilities. Target-language implementation deliberately
-precedes compiler/runtime support; blocked stages remain visible in the ledger.
+Compilation and tests use `transitc build` and `transitc test`. The compiler's Nix
+package supplies a compatible Transit runtime for isolated tests.
+Target-language implementation deliberately precedes compiler/runtime support;
+blocked stages remain visible in the ledger.
 
 ## Upstream pins
 
@@ -138,9 +138,8 @@ precedes compiler/runtime support; blocked stages remain visible in the ledger.
 their content hashes and transitive dependencies. nixpkgs follows Transit's
 locked input. No sibling checkout or moving branch is required.
 
-The initial `transitc` pin includes the package output introduced in
-[`transitc` PR #1](https://github.com/spoke-sh/transitc/pull/1) and points to its
-merge commit on `main`.
+Both upstream pins select revisions from `main`. The current compiler package's
+test runtime uses the same Transit revision as this repository's direct pin.
 
 To upgrade, change the relevant full commit hash in `flake.nix`, run
 `nix flake lock`, and review both files. Re-enter `nix develop`, run all four
